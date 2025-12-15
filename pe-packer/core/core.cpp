@@ -18,8 +18,10 @@ c_core::c_core(std::string input_file, std::string output_file, std::uint32_t mu
 	}
 
 	m_peImage = std::make_unique<pe_bliss::pe_base>(pe_bliss::pe_factory::create_pe(pe_file));
-	if (m_peImage->get_pe_type() != pe_bliss::pe_type_32) {
-		print_error("Binary is not x86 architecture\n");
+	
+	pe_bliss::pe_type peType = m_peImage->get_pe_type();
+	if (peType != pe_bliss::pe_type_32 && peType != pe_bliss::pe_type_64) {
+		print_error("Unsupported PE architecture\n");
 	}
 
 	bool clr_dir = m_peImage->directory_exists(14);
@@ -29,7 +31,16 @@ c_core::c_core(std::string input_file, std::string output_file, std::uint32_t mu
 
 	JitRuntime jitRt;
 	Environment targetEnv = jitRt.environment();
-	targetEnv.setArch(Arch::kX86);
+	
+	// detect arch type
+	if (peType == pe_bliss::pe_type_64) {
+		targetEnv.setArch(Arch::kX64);
+		print_info("Detected x64 architecture\n");
+	} else {
+		targetEnv.setArch(Arch::kX86);
+		print_info("Detected x86 architecture\n");
+	}
+	
 	targetEnv.setSubArch(SubArch::kUnknown);
 
 	m_codeHolder = std::make_unique<CodeHolder>();
@@ -117,9 +128,10 @@ void c_core::xor_function_range(xor_target_t xor_target)
 	std::uint32_t func_size = static_cast<std::uint32_t>(xor_target.func_end - xor_target.func_start);
 	std::uint8_t key = xor_target.xor_key;
 
+	uintptr_t image_base = get_image_base();
 
 	for (auto& sec : m_peImage->get_image_sections()) {
-		std::uintptr_t sec_base = m_peImage->get_image_base_32() + sec.get_virtual_address();
+		std::uintptr_t sec_base = image_base + sec.get_virtual_address();
 		std::uintptr_t sec_end = sec_base + sec.get_raw_data().size();
 
 		if (xor_target.func_start >= sec_base && xor_target.func_end <= sec_end) {
@@ -138,23 +150,21 @@ void c_core::insert_runtime_xor_stub(xor_target_t xor_target)
 	if (!obf_func_pack)
 		return;
 
-	x86::Gp reg_base = x86::ecx;
-	x86::Gp reg_counter = x86::ebx;
-	x86::Gp reg_key = x86::al;
+	arch_utils::arch_regs regs = get_arch_regs();
 
-	m_assembler->mov(reg_base, xor_target.func_start);     // ecx = start address
-	m_assembler->mov(reg_counter, xor_target.func_end - xor_target.func_start);   // ebx = size
-	m_assembler->mov(reg_key, xor_target.xor_key);         // al  = key
+	m_assembler->mov(regs.base, xor_target.func_start);     // rcx/ecx = start address
+	m_assembler->mov(regs.counter, xor_target.func_end - xor_target.func_start);   // rbx/ebx = size
+	m_assembler->mov(regs.key, xor_target.xor_key);         // al = key
 
 	Label loop_start = m_assembler->newLabel();
 	Label loop_end = m_assembler->newLabel();
 
 	m_assembler->bind(loop_start);
-	m_assembler->cmp(reg_counter, 0);
+	m_assembler->cmp(regs.counter, 0);
 	m_assembler->jz(loop_end);
-	m_assembler->xor_(x86::byte_ptr(reg_base), reg_key);
-	m_assembler->inc(reg_base);
-	m_assembler->dec(reg_counter);
+	m_assembler->xor_(x86::byte_ptr(regs.base), regs.key);
+	m_assembler->inc(regs.base);
+	m_assembler->dec(regs.counter);
 	m_assembler->jmp(loop_start);
 	m_assembler->bind(loop_end);
 
@@ -189,26 +199,25 @@ void c_core::xor_sections(std::string sec_to_xor)
 	}
 
 	if (reloc_secptr) {
-		uint32_t reloc_va = reloc_secptr->get_virtual_address() + m_peImage->get_image_base_32();
+		uintptr_t image_base = get_image_base();
+		uintptr_t reloc_va = reloc_secptr->get_virtual_address() + image_base;
 		uint32_t reloc_size = static_cast<uint32_t>(reloc_secptr->get_raw_data().size());
 
-		x86::Gp reg_base = x86::ecx;
-		x86::Gp reg_counter = x86::ebx;
-		x86::Gp reg_key = x86::al;
+		arch_utils::arch_regs regs = get_arch_regs();
 
-		m_assembler->mov(reg_base, reloc_va);      // ecx = RVA(.reloc)
-		m_assembler->mov(reg_counter, reloc_size); // ebx = size
-		m_assembler->mov(reg_key, reloc_xor_key);  // al  = key
+		m_assembler->mov(regs.base, reloc_va);      // rcx/ecx = RVA(.reloc)
+		m_assembler->mov(regs.counter, reloc_size); // rbx/ebx = size
+		m_assembler->mov(regs.key, reloc_xor_key);  // al = key
 
 		Label loop_start = m_assembler->newLabel();
 		Label loop_end = m_assembler->newLabel();
 
 		m_assembler->bind(loop_start);
-		m_assembler->cmp(reg_counter, 0);
+		m_assembler->cmp(regs.counter, 0);
 		m_assembler->jz(loop_end);
-		m_assembler->xor_(x86::byte_ptr(reg_base), reg_key); // ecx ^= key
-		m_assembler->inc(reg_base);
-		m_assembler->dec(reg_counter);
+		m_assembler->xor_(x86::byte_ptr(regs.base), regs.key); // base ^= key
+		m_assembler->inc(regs.base);
+		m_assembler->dec(regs.counter);
 		m_assembler->jmp(loop_start);
 		m_assembler->bind(loop_end);
 
@@ -218,15 +227,16 @@ void c_core::xor_sections(std::string sec_to_xor)
 
 void c_core::process()
 {
-	uint32_t ep_addr = m_assembler->offset();
-	uint32_t idx_oep = random_value(0x1000, 0xFFFFFFFF);
-	uint32_t image_base = m_peImage->get_image_base_32();
+	size_t ep_addr = m_assembler->offset();
+	size_t idx_oep = random_value(0x1000, 0xFFFFFFFF);
+	uintptr_t image_base = get_image_base();
 
 	pe_bliss::section new_section;
 	const char* section_name = ".ptext";
 
-	m_assembler->push(x86::ebp);
-	m_assembler->mov(x86::ebp, x86::esp); // set base pointer to stack pointer
+	arch_utils::arch_regs regs = get_arch_regs();
+	m_assembler->push(regs.base_ptr);
+	m_assembler->mov(regs.base_ptr, regs.stack_ptr); // set base pointer to stack pointer
 	
 	new_section.set_name(section_name);
 	new_section.readable(true).writeable(false).executable(true);
@@ -239,8 +249,8 @@ void c_core::process()
 
 	pe_bliss::section& pe_section = m_peImage->add_section(new_section);
 	m_codeHolder->_baseAddress = pe_section.get_virtual_address();
-	std::uint32_t oep = obf_call_oep ? m_peImage->get_ep() + m_peImage->get_image_base_32() : m_peImage->get_ep();
-	std::uint32_t oepvl_xor_key = random_value(128, 1024);
+	size_t oep = obf_call_oep ? m_peImage->get_ep() + image_base : m_peImage->get_ep();
+	size_t oepvl_xor_key = random_xor_key();
 	Label new_label = m_assembler->newLabel();
 
 	c_adasm adasm_obj(*this);
@@ -268,17 +278,22 @@ void c_core::process()
 		adasm_obj.jmp_label_skip();
 
 	if (obf_call_oep) {
+		arch_utils::arch_regs regs = get_arch_regs();
+		
 		switch (rand() % 2) {
 		case 0:
 
+			// store eax to zero for future xor key
+			m_assembler->xor_(regs.temp1, regs.temp1);
+
 			oep -= idx_oep;
-			m_assembler->mov(x86::edx, x86::esp);
-			m_assembler->mov(x86::eax, oep);
-			m_assembler->add(x86::eax, idx_oep);
-			m_assembler->mov(x86::esp, x86::edx);
+			m_assembler->mov(regs.temp2, regs.stack_ptr);
+			m_assembler->mov(regs.temp1, oep);
+			m_assembler->add(regs.temp1, idx_oep);
+			m_assembler->mov(regs.stack_ptr, regs.temp2);
 			//m_assembler->db(0xCC); 
 
-			m_assembler->jmp(x86::eax);
+			m_assembler->call(regs.temp1);
 
 			if (obf_anti_disasm)
 				adasm_obj.jmp_label_skip();
@@ -296,30 +311,29 @@ void c_core::process()
 			* xor original offset value with random xor key
 			*/
 
-			if (obf_anti_disasm)
-				adasm_obj.jmp_label_skip();
+			// store eax to zero for future xor key
+			m_assembler->xor_(regs.temp1, regs.temp1);
 
 			oep -= idx_oep;
 			idx_oep ^= oepvl_xor_key;
 
-			//m_assembler->mov(x86::eax, oep);
 			// store stack pointer value
-			m_assembler->mov(x86::edx, x86::esp);
+			m_assembler->mov(regs.temp2, regs.stack_ptr);
 
 			// store oep value into stack pointer
-			m_assembler->mov(x86::esp, oep);
+			m_assembler->mov(regs.stack_ptr, oep);
 
-			// move xored value to eax
-			m_assembler->mov(x86::eax, idx_oep);
+			// move xored value to temp1
+			m_assembler->mov(regs.temp1, idx_oep);
 
 			// dexor offset
-			m_assembler->xor_(x86::eax, oepvl_xor_key);
+			m_assembler->xor_(regs.temp1, oepvl_xor_key);
 
 			// build oep address restore our stack and call it
-			m_assembler->add(x86::eax, x86::esp);
-			m_assembler->mov(x86::esp, x86::edx);
+			m_assembler->add(regs.temp1, regs.stack_ptr);
+			m_assembler->mov(regs.stack_ptr, regs.temp2);
 
-			m_assembler->jmp(x86::eax);
+			m_assembler->call(regs.temp1);
 
 			if (obf_fake_instr) {
 				for (int i = 0; i < random_value(0x1, 0x400); ++i) {
@@ -330,8 +344,6 @@ void c_core::process()
 			if (obf_anti_disasm)
 				adasm_obj.jmp_label_skip();
 
-			//m_assembler->db(0xCC); 
-			//m_assembler->jmp(x86::eax);
 			break;
 		default:
 			break;
@@ -339,7 +351,7 @@ void c_core::process()
 	}
 	else {
 
-		m_assembler->jmp(oep);
+		m_assembler->call(oep);
 
 		if (obf_fake_instr) {
 			for (int i = 0; i < random_value(0x1, 0x400); ++i) {
@@ -357,7 +369,7 @@ void c_core::process()
 		xor_sections(section_to_xor[i]);
 	}
 
-	print_info("Address of entry point 0x%x\n", (unsigned int)pe_section.get_virtual_address() + image_base + ep_addr); 
+	print_info("Address of entry point 0x%llx\n", (unsigned long long)(pe_section.get_virtual_address() + image_base + ep_addr)); 
 	print_info("New section characteristics 0x%x\n", pe_section.get_characteristics());
 
 	pe_section.set_raw_data(
@@ -365,9 +377,9 @@ void c_core::process()
 	);
 
 	pe_section.get_raw_data().resize(m_assembler->bufferCapacity());
-	pe_section.set_virtual_size(m_assembler->offset());
+	pe_section.set_virtual_size((uint32_t)m_assembler->offset());
 
-	m_peImage->set_ep(pe_section.get_virtual_address() + ep_addr);
+	m_peImage->set_ep(pe_section.get_virtual_address() + (uint32_t)ep_addr);
 	pe_bliss::import_rebuilder_settings settings(true, false);
 
 	std::ofstream patch_file(m_output, std::ios::out | std::ios::binary | std::ios::trunc);
@@ -399,12 +411,14 @@ void c_core::simple_jump_obfuscation()
 
 		Label label = m_assembler->newLabel();
 		auto rand_reg = get_rand_reg();
-		m_assembler->xor_(rand_reg, random_value(0x10, 0x100));
-		m_assembler->mov(x86::eax, first_value);
-		m_assembler->mov(x86::ebx, second_value);
-		m_assembler->add(x86::eax, third_value);
+		arch_utils::arch_regs regs = get_arch_regs();
 		
-		m_assembler->cmp(x86::eax, x86::ebx);
+		m_assembler->xor_(rand_reg, random_value(0x10, 0x100));
+		m_assembler->mov(regs.temp1, first_value);
+		m_assembler->mov(regs.counter, second_value);
+		m_assembler->add(regs.temp1, third_value);
+		
+		m_assembler->cmp(regs.temp1, regs.counter);
 		switch (rand() % 4)
 		{
 		case 0:
@@ -414,7 +428,11 @@ void c_core::simple_jump_obfuscation()
 			m_assembler->jnz(label);
 			break;
 		case 2:
-			m_assembler->jecxz(label);
+			if (is_x86()) {
+				m_assembler->jecxz(label);
+			} else {
+				m_assembler->jz(label);
+			}
 			break;
 		case 3:
 			m_assembler->jg(label);
@@ -430,14 +448,20 @@ void c_core::simple_jump_obfuscation()
 
 void c_core::call_obfuscation()
 {
+	arch_utils::arch_regs regs = get_arch_regs();
 	int call_deep = (rand() % 10) + 1;
 	for (int i = 0; i < call_deep; i++)
 	{
 		Label call_label = m_assembler->newLabel();
+
+		m_assembler->push(regs.base_ptr);
+		m_assembler->mov(regs.base_ptr, regs.stack_ptr);
+
 		generate_junk_code();
 		m_assembler->call(call_label);
 		generate_junk_code();
 		m_assembler->bind(call_label);
+		
 	}
 }
 
@@ -574,6 +598,7 @@ void c_core::big_conditions_junk()
 				break;
 			case 3:
 				m_assembler->sub(reg1, rand() % 100);
+				break;
 			case 4:
 				m_assembler->mov(reg1, reg2);
 				break;
@@ -618,44 +643,11 @@ void c_core::big_conditions_junk()
 
 x86::Gp c_core::get_rand_reg()
 {
-	int reg_num = rand() % 6;
-	switch (reg_num)
-	{
-	case 0:
-		return x86::eax;
-	case 1:
-		return x86::ebx;
-	case 2:
-		return x86::ecx;
-	case 3:
-		return x86::edx;
-	case 4:
-		return x86::esi;
-	case 5:
-		return x86::edi;
-	default:
-		return x86::eax;
-	}
+	return arch_utils::get_random_gp_reg(m_assembler.get(), is_x64());
 }
 
 x86::Gp c_core::get_rand_lower_reg() {
-	int reg_num = rand() % 6;
-	switch (reg_num) {
-	case 0:
-		return x86::ax;
-	case 1:
-		return x86::bx;
-	case 2:
-		return x86::cx;
-	case 3:
-		return x86::dx;
-	case 4:
-		return x86::si;
-	case 5:
-		return x86::di;
-	default:
-		return x86::ax;
-	}
+	return arch_utils::get_random_lower_reg(is_x64());
 }
 
 void c_core::obfuscation_process()
