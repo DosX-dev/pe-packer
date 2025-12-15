@@ -1,10 +1,10 @@
-# Packer for x86 Portable Executable applications 
+# Packer for x64 and x86 Portable Executable applications 
 
 ## What is this?
 This packer works by encrypting a specific code places, create new section that will be contain the stub for decrypting and the necessary obfuscation. \
 Packer has one common stub that will be obfuscated using several methods which has adverse effects on analyzers/decompilers.
 
-Only X86 binaries are currently supported, but in the future the ability to package x64 binaries will be added.
+X64 and x86 binaries are currently supported.
 
 ## Optional arguments
 Packer by default works off a command line. Listed below are the arguments requried to use it.
@@ -20,7 +20,7 @@ Packer by default works off a command line. Listed below are the arguments requr
 | `-noaslr`   | Allows you to disable ASLR                                                            |                 |
 
 ## GUI Interface
-<img width="800" height="602" alt="image" src="https://github.com/user-attachments/assets/646352aa-d4d3-4a4c-8d74-ad1d9e6852a7" />
+<img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/c428a01d-842f-4b15-92d4-e18693582cee" />
 
 ## Packer CLI in action
 ![Pasted image 20250701214130](https://github.com/user-attachments/assets/c7589479-4a57-4cde-8d11-98b88a8b573b)
