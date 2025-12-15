@@ -1,5 +1,6 @@
 #include "mba.hpp"
 #include "../utils/utils.hpp"
+#include "arch_utils.hpp"
 
 using namespace asmjit;
 
@@ -36,6 +37,8 @@ void c_mba::mba_code(c_mba::options opt) {
 	switch (x) {
 
 	case 0: {
+		arch_utils::arch_regs regs = m_core.get_arch_regs();
+		bool is64 = m_core.is_x64();
 
 		Label new_label = m_core.get_assembler()->newLabel();
 		gen_math_operations();
@@ -43,46 +46,50 @@ void c_mba::mba_code(c_mba::options opt) {
 		// create new jump equal to label
 		m_core.get_assembler()->je(new_label);
 
-		// load x and y into regs
-		m_core.get_assembler()->mov(x86::eax, x86::edi);
-		m_core.get_assembler()->mov(x86::ebx, x86::esi);
+		// load x and y into regs (используем архитектурно-независимые регистры)
+		auto reg_x = m_core.get_rand_reg();
+		auto reg_y = m_core.get_rand_reg();
+		m_core.get_assembler()->mov(regs.temp1, reg_x);
+		m_core.get_assembler()->mov(regs.counter, reg_y);
 
-		// calculate in eax: (X | Y)
+		// calculate in temp1: (X | Y)
 		// store result in stack
-		m_core.get_assembler()->or_(x86::eax, x86::ebx); // eax = X | Y
-		m_core.get_assembler()->push(x86::eax);
+		m_core.get_assembler()->or_(regs.temp1, regs.counter); // temp1 = X | Y
+		m_core.get_assembler()->push(regs.temp1);
 
-		// calculate in eax: (X & Y)
-		m_core.get_assembler()->mov(x86::eax, x86::edi);
-		m_core.get_assembler()->and_(x86::eax, x86::ebx);
+		// calculate in temp1: (X & Y)
+		m_core.get_assembler()->mov(regs.temp1, reg_x);
+		m_core.get_assembler()->and_(regs.temp1, regs.counter);
 
 		// get (X | Y) from stack and substraction (X & Y) 
-		// store result in ecx
-		m_core.get_assembler()->pop(x86::ecx);
-		m_core.get_assembler()->sub(x86::ecx, x86::eax);
+		// store result in base
+		m_core.get_assembler()->pop(regs.base);
+		m_core.get_assembler()->sub(regs.base, regs.temp1);
 
-		m_core.get_assembler()->mov(x86::eax, x86::ecx);
+		m_core.get_assembler()->mov(regs.temp1, regs.base);
 
 		// store result in stack and manipulate it
-		m_core.get_assembler()->push(x86::eax);
-		m_core.get_assembler()->mov(x86::ebx, x86::eax);
-		m_core.get_assembler()->xor_(x86::ebx, x86::edi);
+		m_core.get_assembler()->push(regs.temp1);
+		m_core.get_assembler()->mov(regs.counter, regs.temp1);
+		m_core.get_assembler()->xor_(regs.counter, reg_x);
 
 		// its loc
 		m_core.get_assembler()->bind(new_label);
 
 		// store base pointer and push new from stack
-		m_core.get_assembler()->push(x86::rbp);
-		m_core.get_assembler()->mov(x86::rbp, x86::rsp);
+		m_core.get_assembler()->push(regs.base_ptr);
+		m_core.get_assembler()->mov(regs.base_ptr, regs.stack_ptr);
 		gen_math_operations();
 
 		// restore base pointer
-		m_core.get_assembler()->pop(x86::rbp);
+		m_core.get_assembler()->pop(regs.base_ptr);
 
 		break;
 	}
 
 	case 1: {
+		arch_utils::arch_regs regs = m_core.get_arch_regs();
+		bool is64 = m_core.is_x64();
 
 		Label new_label = m_core.get_assembler()->newLabel();
 
@@ -92,87 +99,94 @@ void c_mba::mba_code(c_mba::options opt) {
 		m_core.get_assembler()->je(new_label);
 
 		// load x and y into regs
-		m_core.get_assembler()->mov(x86::eax, x86::edi);
-		m_core.get_assembler()->mov(x86::ebx, x86::esi);
+		auto reg_x = m_core.get_rand_reg();
+		auto reg_y = m_core.get_rand_reg();
+		m_core.get_assembler()->mov(regs.temp1, reg_x);
+		m_core.get_assembler()->mov(regs.counter, reg_y);
 
-		// calculate in eax: (X & Y)
+		// calculate in temp1: (X & Y)
 		// store result in stack
-		m_core.get_assembler()->and_(x86::eax, x86::ebx);
-		m_core.get_assembler()->push(x86::eax);
+		m_core.get_assembler()->and_(regs.temp1, regs.counter);
+		m_core.get_assembler()->push(regs.temp1);
 
-		// calculate in eax: (X | Y)
-		m_core.get_assembler()->mov(x86::eax, x86::edi);
-		m_core.get_assembler()->or_(x86::eax, x86::ebx);
+		// calculate in temp1: (X | Y)
+		m_core.get_assembler()->mov(regs.temp1, reg_x);
+		m_core.get_assembler()->or_(regs.temp1, regs.counter);
 
 		// get (X & Y) from stack and addition (X | Y)
-		// store result in ecx
-		m_core.get_assembler()->pop(x86::ecx);
-		m_core.get_assembler()->add(x86::ecx, x86::eax);
+		// store result in base
+		m_core.get_assembler()->pop(regs.base);
+		m_core.get_assembler()->add(regs.base, regs.temp1);
 
-		m_core.get_assembler()->mov(x86::eax, x86::ecx);
+		m_core.get_assembler()->mov(regs.temp1, regs.base);
 
 		// store result in stack and manipulate it
-		m_core.get_assembler()->push(x86::eax);
-		m_core.get_assembler()->mov(x86::ebx, x86::eax);
-		m_core.get_assembler()->xor_(x86::ebx, x86::edi);
+		m_core.get_assembler()->push(regs.temp1);
+		m_core.get_assembler()->mov(regs.counter, regs.temp1);
+		m_core.get_assembler()->xor_(regs.counter, reg_x);
 
 		// its loc
 		m_core.get_assembler()->bind(new_label);
 
 		// store base pointer and push new from stack
-		m_core.get_assembler()->push(x86::rbp);
-		m_core.get_assembler()->mov(x86::rbp, x86::rsp);
+		m_core.get_assembler()->push(regs.base_ptr);
+		m_core.get_assembler()->mov(regs.base_ptr, regs.stack_ptr);
 		gen_math_operations();
 
 		// restore base pointer
-		m_core.get_assembler()->pop(x86::rbp);
+		m_core.get_assembler()->pop(regs.base_ptr);
 
 		break;
 	}
 
 	case 2: {
+		arch_utils::arch_regs regs = m_core.get_arch_regs();
+		bool is64 = m_core.is_x64();
+
 		Label new_label = m_core.get_assembler()->newLabel();
 
 		// create new jump equal to label
 		m_core.get_assembler()->je(new_label);
 
 		// load x and y into regs
-		m_core.get_assembler()->mov(x86::eax, x86::edi);
-		m_core.get_assembler()->mov(x86::ebx, x86::esi);
+		auto reg_x = m_core.get_rand_reg();
+		auto reg_y = m_core.get_rand_reg();
+		m_core.get_assembler()->mov(regs.temp1, reg_x);
+		m_core.get_assembler()->mov(regs.counter, reg_y);
 
-		// calculate in eax: (X & Y)
+		// calculate in temp1: (X & Y)
 		// store result in stack
-		m_core.get_assembler()->xor_(x86::eax, x86::ebx);
-		m_core.get_assembler()->neg(x86::eax);
-		m_core.get_assembler()->push(x86::eax);
+		m_core.get_assembler()->xor_(regs.temp1, regs.counter);
+		m_core.get_assembler()->neg(regs.temp1);
+		m_core.get_assembler()->push(regs.temp1);
 
-		// calculate in eax: (X | Y)
-		m_core.get_assembler()->mov(x86::eax, x86::edi);
-		m_core.get_assembler()->neg(x86::eax);
-		m_core.get_assembler()->and_(x86::eax, x86::ebx);
+		// calculate in temp1: (X | Y)
+		m_core.get_assembler()->mov(regs.temp1, reg_x);
+		m_core.get_assembler()->neg(regs.temp1);
+		m_core.get_assembler()->and_(regs.temp1, regs.counter);
 
 		// get (X & Y) from stack and addition (X | Y)
-		// store result in ecx
-		m_core.get_assembler()->pop(x86::ecx);
-		m_core.get_assembler()->add(x86::ecx, x86::eax);
+		// store result in base
+		m_core.get_assembler()->pop(regs.base);
+		m_core.get_assembler()->add(regs.base, regs.temp1);
 
-		m_core.get_assembler()->mov(x86::eax, x86::ecx);
+		m_core.get_assembler()->mov(regs.temp1, regs.base);
 
 		// store result in stack and manipulate it
-		m_core.get_assembler()->push(x86::eax);
-		m_core.get_assembler()->mov(x86::ebx, x86::eax);
-		m_core.get_assembler()->xor_(x86::ebx, x86::edi);
+		m_core.get_assembler()->push(regs.temp1);
+		m_core.get_assembler()->mov(regs.counter, regs.temp1);
+		m_core.get_assembler()->xor_(regs.counter, reg_x);
 
 		// its loc
 		m_core.get_assembler()->bind(new_label);
 
 		// store base pointer and push new from stack
-		m_core.get_assembler()->push(x86::rbp);
-		m_core.get_assembler()->mov(x86::rbp, x86::rsp);
+		m_core.get_assembler()->push(regs.base_ptr);
+		m_core.get_assembler()->mov(regs.base_ptr, regs.stack_ptr);
 		gen_math_operations();
 
 		// restore base pointer
-		m_core.get_assembler()->pop(x86::rbp);
+		m_core.get_assembler()->pop(regs.base_ptr);
 
 		break;
 	}

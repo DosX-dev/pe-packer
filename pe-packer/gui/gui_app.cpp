@@ -7,6 +7,7 @@
 #include <commdlg.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 
 #include <array>
 #include <algorithm>
@@ -20,11 +21,14 @@
 #include <vector>
 #include <iomanip>
 #include <cstring>
+#include <fstream>
 
 #include "../core/core.hpp"
 #include "../handler/handler.hpp"
 #include "../utils/arguments.hpp"
 #include "../utils/utils.hpp"
+#include "../pe_lib/pe_bliss.h"
+#include "../pe_lib/pe_factory.h"
 
 #include "../../vendor/imgui/imgui.h"
 #include "../../vendor/imgui/backends/imgui_impl_dx11.h"
@@ -32,13 +36,26 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+LogCallback g_logCallback = nullptr;
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "shell32.lib")
 
 static constexpr int kGuiWidth = 800;
 static constexpr int kGuiHeight = 600;
+
+struct FileInfo {
+    std::string architecture;
+    std::string entryPoint;
+    std::string imageBase;
+    std::string imageSize;
+    std::string sectionCount;
+    std::string filePath;
+    bool isValid = false;
+};
 
 struct GuiState {
     std::array<char, MAX_PATH> input{};
@@ -55,6 +72,7 @@ struct GuiState {
     bool packFunctions = false;
     bool outputCustomized = false;
     std::vector<std::pair<std::string, bool>> logEntries;
+    FileInfo fileInfo;
 };
 
 static ID3D11Device*           g_pd3dDevice = nullptr;
@@ -62,12 +80,24 @@ static ID3D11DeviceContext*    g_pd3dDeviceContext = nullptr;
 static IDXGISwapChain*         g_pSwapChain = nullptr;
 static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 
+// Drag n drop state
+static HWND g_hwnd = nullptr;
+static GuiState* g_state = nullptr;
+static std::string g_droppedFilePath;
+static bool g_dropToInput = false;
+static bool g_hasDroppedFile = false;
+static ImVec2 g_inputFieldMin = ImVec2(0, 0);
+static ImVec2 g_inputFieldMax = ImVec2(0, 0);
+static ImVec2 g_outputFieldMin = ImVec2(0, 0);
+static ImVec2 g_outputFieldMax = ImVec2(0, 0);
+static bool g_shouldClose = false;
+
 static bool CreateDeviceD3D(HWND hWnd);
 static void CleanupDeviceD3D();
 static void CreateRenderTarget();
 static void CleanupRenderTarget();
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-static bool ExecutePacking(const GuiState& state, std::string& statusMessage);
+static bool ExecutePacking(GuiState& state, std::string& statusMessage);
 static void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess);
 static bool BrowseInputFile(GuiState& state);
 static bool BrowseOutputFile(GuiState& state);
@@ -75,6 +105,7 @@ static void SetDefaultOutputFromInput(GuiState& state);
 static void CopyStringToBuffer(const std::string& value, std::array<char, MAX_PATH>& buffer);
 static void ApplyBorderlessWindow(HWND hwnd, int width, int height);
 static void ApplyCustomTheme(ImGuiStyle& style);
+static void ExtractFileInfo(GuiState& state);
 
 int run_gui() {
     WNDCLASSEX wc = {
@@ -115,6 +146,10 @@ int run_gui() {
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
 
+    // Enable drag and drop for files
+    DragAcceptFiles(hwnd, TRUE);
+    g_hwnd = hwnd;
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -126,6 +161,7 @@ int run_gui() {
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     GuiState state{};
+    g_state = &state;
     std::string statusMessage;
     bool lastSuccess = false;
 
@@ -139,7 +175,7 @@ int run_gui() {
                 done = true;
             }
         }
-        if (done) {
+        if (done || g_shouldClose) {
             break;
         }
 
@@ -170,7 +206,7 @@ int run_gui() {
     return EXIT_SUCCESS;
 }
 
-bool ExecutePacking(const GuiState& state, std::string& statusMessage) {
+bool ExecutePacking(GuiState& state, std::string& statusMessage) {
     std::string inputPath(state.input.data());
     std::string outputPath(state.output.data());
     std::string fpackStart(state.fpackStart.data());
@@ -192,6 +228,23 @@ bool ExecutePacking(const GuiState& state, std::string& statusMessage) {
         statusMessage = "Provide both start and end addresses for -fpack.";
         return false;
     }
+
+    // clear logs
+    state.logEntries.clear();
+
+    g_logCallback = [&state](const std::string& logMsg, bool isSuccess) {
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        std::ostringstream line;
+        line << "[" << std::setfill('0') << std::setw(2) << st.wHour << ":"
+             << std::setfill('0') << std::setw(2) << st.wMinute << ":"
+             << std::setfill('0') << std::setw(2) << st.wSecond << "] "
+             << logMsg;
+        state.logEntries.emplace_back(line.str(), isSuccess);
+        if (state.logEntries.size() > 100) {
+            state.logEntries.erase(state.logEntries.begin());
+        }
+    };
 
     std::vector<std::string> args;
     args.emplace_back("pe-packer");
@@ -231,11 +284,32 @@ bool ExecutePacking(const GuiState& state, std::string& statusMessage) {
         print_info("Mutations count: %u\n", mutations);
         auto packer = std::make_unique<c_core>(inputPath, outputPath, mutations);
         packer->process();
-        statusMessage = "Packing completed successfully.";
+        
+        if (state.logEntries.size() > 100) {
+            state.logEntries.erase(state.logEntries.begin());
+        }
+        
+        // reset callback
+        g_logCallback = nullptr;
         return true;
     }
     catch (const std::exception& ex) {
         statusMessage = ex.what();
+        
+        // add message error
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        std::ostringstream line;
+        line << "[" << std::setfill('0') << std::setw(2) << st.wHour << ":"
+             << std::setfill('0') << std::setw(2) << st.wMinute << ":"
+             << std::setfill('0') << std::setw(2) << st.wSecond << "] "
+             << "[ error ] " << ex.what();
+        state.logEntries.emplace_back(line.str(), false);
+        if (state.logEntries.size() > 100) {
+            state.logEntries.erase(state.logEntries.begin());
+        }
+        
+        g_logCallback = nullptr;
         return false;
     }
 }
@@ -251,18 +325,19 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     if (ImGui::Begin("pe-packer GUI", nullptr, windowFlags)) {
+        // Title bar
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
         ImGui::Text("pe-packer");
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::TextDisabled("| Version 1.0.1");
+        ImGui::TextDisabled("| Version 1.0.2");
         ImGui::Spacing();
 
         const float browseWidth = 110.0f;
         const float minFieldWidth = 160.0f;
         ImGuiStyle& style = ImGui::GetStyle();
 
-        auto fileInputRow = [&](const char* label, std::array<char, MAX_PATH>& buffer, auto&& browseFn) -> bool {
+        auto fileInputRow = [&](const char* label, std::array<char, MAX_PATH>& buffer, auto&& browseFn, bool isInput) -> bool {
             ImGui::PushID(label);
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(label);
@@ -273,7 +348,41 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                 fieldWidth = minFieldWidth;
             }
             ImGui::SetNextItemWidth(fieldWidth);
+            
+            ImVec2 fieldMin = ImGui::GetCursorScreenPos();
+
             bool edited = ImGui::InputText("##path", buffer.data(), buffer.size());
+            
+            // Store field bounds
+            ImVec2 fieldMax = ImGui::GetItemRectMax();
+            if (isInput) {
+                g_inputFieldMin = fieldMin;
+                g_inputFieldMax = fieldMax;
+            } else {
+                g_outputFieldMin = fieldMin;
+                g_outputFieldMax = fieldMax;
+            }
+            
+            // Check if file was dropped on this field
+            if (g_hasDroppedFile && g_dropToInput == isInput) {
+                CopyStringToBuffer(g_droppedFilePath, buffer);
+                if (isInput) {
+                    state.outputCustomized = false;
+                    SetDefaultOutputFromInput(state);
+                    ExtractFileInfo(state);
+                } else {
+                    state.outputCustomized = true;
+                }
+                edited = true;
+                g_hasDroppedFile = false;
+            }
+
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("FILE")) {
+                }
+                ImGui::EndDragDropTarget();
+            }
+            
             ImGui::SameLine();
             if (ImGui::Button("Browse", ImVec2(browseWidth, 0.f)) && browseFn()) {
                 edited = true;
@@ -282,11 +391,12 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             return edited;
         };
 
-        if (fileInputRow("Input file", state.input, [&]() { return BrowseInputFile(state); })) {
+        if (fileInputRow("Input file", state.input, [&]() { return BrowseInputFile(state); }, true)) {
             SetDefaultOutputFromInput(state);
+            ExtractFileInfo(state);
         }
 
-        if (fileInputRow("Output file", state.output, [&]() { return BrowseOutputFile(state); })) {
+        if (fileInputRow("Output file", state.output, [&]() { return BrowseOutputFile(state); }, false)) {
             state.outputCustomized = true;
         }
 
@@ -294,103 +404,191 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         ImGui::Separator();
         ImGui::Spacing();
 
-        ImGui::SliderInt("Mutations", &state.mutationBase, 1, 100);
-        ImGui::SameLine();
-        ImGui::TextDisabled("=> %d iterations", state.mutationBase * 10);
-
-        ImGui::Spacing();
-        ImGui::Text("Options");
-        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 4.f));
-        if (ImGui::BeginTable("OptionsFlags", 2, ImGuiTableFlags_SizingStretchProp)) {
-            auto checkbox = [](const char* label, bool* value) {
-                ImGui::TableNextColumn();
-                ImGui::Checkbox(label, value);
-            };
-            checkbox("Remove ASLR", &state.removeAslr);
-            checkbox("OEP call obfuscation", &state.obfuscateOep);
-            checkbox("Anti-disassembly", &state.antiDisasm);
-            checkbox("Mixed Boolean Arithmetic obfuscation", &state.mba);
-            checkbox("Encrypt sections", &state.encryptSections);
-            checkbox("Generate fake instructions", &state.fakeInstructions);
-            ImGui::EndTable();
+        // Reserve space for logs at the bottom
+        float logsHeight = 200.0f;
+        float middleSectionHeight = ImGui::GetContentRegionAvail().y - logsHeight - style.ItemSpacing.y;
+        if (middleSectionHeight < 100.0f) {
+            middleSectionHeight = 100.0f;
         }
-        ImGui::PopStyleVar();
 
-        ImGui::Spacing();
-        if (ImGui::Checkbox("Encrypt function", &state.packFunctions)) {
-            if (!state.packFunctions) {
-                state.fpackStart.fill(0);
-                state.fpackEnd.fill(0);
+        float leftColumnWidth = ImGui::GetContentRegionAvail().x * 0.55f;
+        float rightColumnWidth = ImGui::GetContentRegionAvail().x * 0.45f - style.ItemSpacing.x;
+        
+        if (ImGui::BeginChild("OptionsColumn", ImVec2(leftColumnWidth, middleSectionHeight), false)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
+            float optionsTextWidth = ImGui::CalcTextSize("Options").x;
+            float optionsAvailableWidth = ImGui::GetContentRegionAvail().x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (optionsAvailableWidth - optionsTextWidth) * 0.5f);
+            ImGui::Text("Options");
+            ImGui::PopStyleColor();
+            
+            ImGui::Spacing();
+            
+            ImGui::SliderInt("Mutation Cycles", &state.mutationBase, 1, 100);
+            //ImGui::SameLine();
+            //ImGui::TextDisabled("Mutations count");
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 4.f));
+            if (ImGui::BeginTable("OptionsFlags", 2, ImGuiTableFlags_SizingStretchProp)) {
+                auto checkbox = [](const char* label, bool* value) {
+                    ImGui::TableNextColumn();
+                    ImGui::Checkbox(label, value);
+                };
+                checkbox("Remove ASLR", &state.removeAslr);
+                checkbox("OEP call obfuscation", &state.obfuscateOep);
+                checkbox("Anti-disassembly", &state.antiDisasm);
+                checkbox("Mixed Boolean Arithmetic", &state.mba);
+                checkbox("Encrypt sections", &state.encryptSections);
+                checkbox("Generate fake instructions", &state.fakeInstructions);
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar();
+
+            ImGui::Spacing();
+            if (ImGui::Checkbox("Encrypt function", &state.packFunctions)) {
+                if (!state.packFunctions) {
+                    state.fpackStart.fill(0);
+                    state.fpackEnd.fill(0);
+                }
+            }
+
+            if (state.packFunctions) {
+                ImGui::Indent();
+                ImGui::InputText("Start address", state.fpackStart.data(), state.fpackStart.size());
+                ImGui::InputText("End address", state.fpackEnd.data(), state.fpackEnd.size());
+                ImGui::Unindent();
             }
         }
+        ImGui::EndChild();
 
-        if (state.packFunctions) {
-            ImGui::Indent();
-            ImGui::InputText("Start address (hex)", state.fpackStart.data(), state.fpackStart.size());
-            ImGui::InputText("End address (hex)", state.fpackEnd.data(), state.fpackEnd.size());
-            ImGui::Unindent();
+        ImGui::SameLine();
+
+        if (ImGui::BeginChild("FileInfoColumn", ImVec2(rightColumnWidth, middleSectionHeight), false)) {
+            if (state.fileInfo.isValid) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
+                float fileInfoTextWidth = ImGui::CalcTextSize("File Information").x;
+                float fileInfoAvailableWidth = ImGui::GetContentRegionAvail().x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (fileInfoAvailableWidth - fileInfoTextWidth) * 0.5f);
+                ImGui::Text("File Information");
+                ImGui::PopStyleColor();
+                
+                ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 3.f));
+                if (ImGui::BeginTable("FileInfo", 2, ImGuiTableFlags_SizingStretchProp)) {
+                    // Left Column
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("File:");
+                    ImGui::Text("%s", state.fileInfo.filePath.c_str());
+                    
+                    ImGui::TextDisabled("Architecture:");
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.82f, 0.53f, 1.0f));
+                    ImGui::Text("%s", state.fileInfo.architecture.c_str());
+                    ImGui::PopStyleColor();
+                    
+                    ImGui::TextDisabled("Entry Point:");
+                    ImGui::Text("%s", state.fileInfo.entryPoint.c_str());
+
+                    // Right Column
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("Image Base:");
+                    ImGui::Text("%s", state.fileInfo.imageBase.c_str());
+                    
+                    ImGui::TextDisabled("Image Size:");
+                    ImGui::Text("%s", state.fileInfo.imageSize.c_str());
+                    
+                    ImGui::TextDisabled("Sections:");
+                    ImGui::Text("%s", state.fileInfo.sectionCount.c_str());
+
+                    ImGui::EndTable();
+                }
+                ImGui::PopStyleVar();
+            } else {
+                ImGui::TextDisabled("No file loaded");
+            }
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            // Actions block
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
+            float actionsTextWidth = ImGui::CalcTextSize("Actions").x;
+            float actionsAvailableWidth = ImGui::GetContentRegionAvail().x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (actionsAvailableWidth - actionsTextWidth) * 0.5f);
+            ImGui::Text("Actions");
+            ImGui::PopStyleColor();
+            
+            ImGui::Spacing();
+            
+            const float buttonWidth = 120.0f;
+            const float buttonSpacing = 15.0f;
+            float availableWidth = ImGui::GetContentRegionAvail().x;
+            float totalButtonsWidth = buttonWidth * 2.0f + buttonSpacing;
+            float offset = (availableWidth - totalButtonsWidth) * 0.5f;
+            if (offset < 0.0f) {
+                offset = 0.0f;
+            }
+            float startX = ImGui::GetCursorPosX() + offset;
+            ImGui::SetCursorPosX(startX);
+            
+            if (ImGui::Button("Pack", ImVec2(buttonWidth, 0.0f))) {
+                lastSuccess = ExecutePacking(state, statusMessage);
+            }
+            
+            ImGui::SameLine(0.0f, buttonSpacing);
+            
+            if (ImGui::Button("Close", ImVec2(buttonWidth, 0.0f))) {
+                g_shouldClose = true;
+                PostQuitMessage(0);
+            }
         }
+        ImGui::EndChild();
 
-        ImGui::Spacing();
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        const float packWidth = 150.0f;
-        const float exitWidth = 110.0f;
-        float buttonSpacing = style.ItemSpacing.x;
-        float availableWidth = ImGui::GetContentRegionAvail().x;
-        float totalWidth = packWidth + exitWidth + buttonSpacing;
-        float offset = (availableWidth - totalWidth) * 0.5f;
-        if (offset < 0.0f) {
-            offset = 0.0f;
-        }
-        float startX = ImGui::GetCursorPosX() + offset;
-        ImGui::SetCursorPosX(startX);
-
-        if (ImGui::Button("Pack", ImVec2(packWidth, 0.0f))) {
-            lastSuccess = ExecutePacking(state, statusMessage);
-            std::ostringstream line;
-            SYSTEMTIME st{};
-            GetLocalTime(&st);
-            line << "[" << std::setfill('0') << std::setw(2) << st.wHour << ":"
-                 << std::setfill('0') << std::setw(2) << st.wMinute << ":"
-                 << std::setfill('0') << std::setw(2) << st.wSecond << "] "
-                 << statusMessage;
-            state.logEntries.emplace_back(line.str(), lastSuccess);
-            if (state.logEntries.size() > 100) {
-                state.logEntries.erase(state.logEntries.begin());
-            }
-        }
-        ImGui::SameLine(0.0f, buttonSpacing);
-        if (ImGui::Button("Exit", ImVec2(exitWidth, 0.0f))) {
-            PostQuitMessage(0);
-        }
-
-        ImGui::Spacing();
-        ImGui::Spacing();
-
+        // Logs section
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2 min = ImGui::GetCursorScreenPos();
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImVec2 max = ImVec2(min.x + avail.x, min.y + 160.0f);
+        float availHeight = avail.y;
+        ImVec2 max = ImVec2(min.x + avail.x, min.y + availHeight);
         ImVec4 headerColor = ImVec4(0.16f, 0.18f, 0.22f, 0.95f);
-        drawList->AddRectFilled(min, max, ImGui::ColorConvertFloat4ToU32(headerColor), 16.0f);
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
-        ImGui::SetCursorScreenPos(ImVec2(min.x + 12.0f, min.y + 10.0f));
+        drawList->AddRectFilled(min, max, ImGui::ColorConvertFloat4ToU32(headerColor), 12.0f);
+        ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        ImGui::SetCursorScreenPos(ImVec2(min.x + 10.0f, min.y + 8.0f));
         ImGui::TextDisabled("Activity");
-        ImGui::SetCursorScreenPos(ImVec2(min.x + 10.0f, min.y + 36.0f));
+        
+        // Calculate proper size for child window
+        float childStartY = min.y + 28.0f;
+        float childHeight = availHeight - (childStartY - min.y) - 8.0f; // 8px padding at bottom
+        float childWidth = avail.x - 16.0f; // 8px padding on each side
+        
+        ImGui::SetCursorScreenPos(ImVec2(min.x + 8.0f, childStartY));
 
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
-        if (ImGui::BeginChild("log_region", ImVec2(avail.x - 20.0f, 110.0f), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+        if (ImGui::BeginChild("log_region", ImVec2(childWidth, childHeight), false, ImGuiWindowFlags_NoBackground)) {
             if (state.logEntries.empty()) {
                 ImGui::TextDisabled("Logs will appear here.");
             } else {
-                for (auto it = state.logEntries.rbegin(); it != state.logEntries.rend(); ++it) {
-                    ImVec4 color = it->second ? ImVec4(0.45f, 0.82f, 0.53f, 1.0f) : ImVec4(0.91f, 0.48f, 0.40f, 1.0f);
+                static size_t lastLogCount = 0;
+                bool shouldAutoScroll = (state.logEntries.size() > lastLogCount);
+                lastLogCount = state.logEntries.size();
+                
+                // Set text wrap position to prevent overflow
+                float wrapPos = ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x * 2.0f;
+                ImGui::PushTextWrapPos(wrapPos);
+                
+                for (const auto& entry : state.logEntries) {
+                    ImVec4 color = entry.second ? ImVec4(0.45f, 0.82f, 0.53f, 1.0f) : ImVec4(0.91f, 0.48f, 0.40f, 1.0f);
                     ImGui::PushStyleColor(ImGuiCol_Text, color);
-                    ImGui::TextWrapped("%s", it->first.c_str());
+                    ImGui::TextWrapped("%s", entry.first.c_str());
                     ImGui::PopStyleColor();
+                }
+                
+                ImGui::PopTextWrapPos();
+                
+                if (shouldAutoScroll) {
+                    ImGui::SetScrollY(ImGui::GetScrollMaxY());
                 }
             }
         }
@@ -498,6 +696,49 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         return HTCLIENT;
     }
+    case WM_DROPFILES: {
+        HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+        
+        UINT fileCount = DragQueryFile(hDrop, 0xFFFFFFFF, nullptr, 0);
+        
+        if (fileCount > 0) {
+            char filePath[MAX_PATH];
+            if (DragQueryFileA(hDrop, 0, filePath, MAX_PATH) > 0) {
+                POINT pt;
+                DragQueryPoint(hDrop, &pt);
+                
+                POINT screenPt = pt;
+                ClientToScreen(hWnd, &screenPt);
+                
+                g_droppedFilePath = filePath;
+                
+                ImVec2 dropPos(static_cast<float>(screenPt.x), static_cast<float>(screenPt.y));
+                
+                bool inInputField = (dropPos.x >= g_inputFieldMin.x && dropPos.x <= g_inputFieldMax.x &&
+                                     dropPos.y >= g_inputFieldMin.y && dropPos.y <= g_inputFieldMax.y);
+                bool inOutputField = (dropPos.x >= g_outputFieldMin.x && dropPos.x <= g_outputFieldMax.x &&
+                                      dropPos.y >= g_outputFieldMin.y && dropPos.y <= g_outputFieldMax.y);
+                
+                if (inInputField) {
+                    g_dropToInput = true;
+                    g_hasDroppedFile = true;
+                } else if (inOutputField) {
+                    g_dropToInput = false;
+                    g_hasDroppedFile = true;
+                } else {
+                    // Fallback: use Y position if field bounds are not yet set :D
+                    RECT rc;
+                    GetClientRect(hWnd, &rc);
+                    int windowHeight = rc.bottom - rc.top;
+                    g_dropToInput = (pt.y < windowHeight / 2);
+                    g_hasDroppedFile = true;
+                }
+            }
+        }
+        
+        DragFinish(hDrop);
+        return 0;
+    }
     case WM_SIZE:
         if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) {
             CleanupRenderTarget();
@@ -558,6 +799,79 @@ void SetDefaultOutputFromInput(GuiState& state) {
     }
 }
 
+static void ExtractFileInfo(GuiState& state) {
+    state.fileInfo.isValid = false;
+    state.fileInfo.architecture.clear();
+    state.fileInfo.entryPoint.clear();
+    state.fileInfo.imageBase.clear();
+    state.fileInfo.imageSize.clear();
+    state.fileInfo.sectionCount.clear();
+    state.fileInfo.filePath.clear();
+
+    std::string inputPath(state.input.data());
+    if (inputPath.empty()) {
+        return;
+    }
+
+    try {
+        std::ifstream pe_file(inputPath, std::ios::in | std::ios::binary);
+        if (!pe_file) {
+            return;
+        }
+
+        auto peImage = std::make_unique<pe_bliss::pe_base>(pe_bliss::pe_factory::create_pe(pe_file));
+        pe_bliss::pe_type peType = peImage->get_pe_type();
+        
+        if (peType != pe_bliss::pe_type_32 && peType != pe_bliss::pe_type_64) {
+            return;
+        }
+
+        // architecture
+        if (peType == pe_bliss::pe_type_64) {
+            state.fileInfo.architecture = "x64";
+        } else {
+            state.fileInfo.architecture = "x86";
+        }
+
+        // entry point
+        uint32_t ep = peImage->get_ep();
+        std::ostringstream epStream;
+        epStream << "0x" << std::hex << std::uppercase << ep;
+        state.fileInfo.entryPoint = epStream.str();
+
+        // image base
+        std::ostringstream baseStream;
+        if (peType == pe_bliss::pe_type_64) {
+            uint64_t base = peImage->get_image_base_64();
+            baseStream << "0x" << std::hex << std::uppercase << base;
+        } else {
+            uint32_t base = peImage->get_image_base_32();
+            baseStream << "0x" << std::hex << std::uppercase << base;
+        }
+        state.fileInfo.imageBase = baseStream.str();
+
+        // image size
+        uint32_t imageSize = peImage->get_size_of_image();
+        std::ostringstream sizeStream;
+        sizeStream << "0x" << std::hex << std::uppercase << imageSize 
+                   << " (" << std::dec << imageSize << " bytes)";
+        state.fileInfo.imageSize = sizeStream.str();
+
+        // section count
+        uint16_t sectionCount = peImage->get_number_of_sections();
+        state.fileInfo.sectionCount = std::to_string(sectionCount);
+
+        // file path
+        std::filesystem::path filePath(inputPath);
+        state.fileInfo.filePath = filePath.filename().string();
+
+        state.fileInfo.isValid = true;
+    }
+    catch (...) {
+        state.fileInfo.isValid = false;
+    }
+}
+
 bool BrowseInputFile(GuiState& state) {
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(ofn);
@@ -570,6 +884,7 @@ bool BrowseInputFile(GuiState& state) {
     if (GetOpenFileNameA(&ofn) == TRUE) {
         state.outputCustomized = false;
         SetDefaultOutputFromInput(state);
+        ExtractFileInfo(state);
         return true;
     }
     return false;
@@ -639,6 +954,7 @@ void ApplyCustomTheme(ImGuiStyle& style) {
     style.FrameRounding = 10.0f;
     style.ScrollbarRounding = 12.0f;
     style.GrabRounding = 10.0f;
+    style.GrabMinSize = 12.0f;
     style.WindowBorderSize = 0.0f;
     style.FrameBorderSize = 0.0f;
     style.ChildBorderSize = 0.0f;
@@ -652,9 +968,15 @@ void ApplyCustomTheme(ImGuiStyle& style) {
     style.Colors[ImGuiCol_WindowBg] = bg;
     style.Colors[ImGuiCol_ChildBg] = ImVec4(bg.x + 0.01f, bg.y + 0.01f, bg.z + 0.02f, 1.0f);
     style.Colors[ImGuiCol_PopupBg] = panel;
-    style.Colors[ImGuiCol_FrameBg] = panel;
-    style.Colors[ImGuiCol_FrameBgHovered] = accentHover;
-    style.Colors[ImGuiCol_FrameBgActive] = accentActive;
+    
+    ImVec4 sliderTrack = ImVec4(0.20f, 0.22f, 0.28f, 1.0f);
+    style.Colors[ImGuiCol_FrameBg] = sliderTrack;
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.24f, 0.26f, 0.32f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.30f, 0.36f, 1.0f);
+
+    style.Colors[ImGuiCol_SliderGrab] = accent;
+    style.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.45f, 0.62f, 0.95f, 1.0f);
+    
     style.Colors[ImGuiCol_Button] = accent;
     style.Colors[ImGuiCol_ButtonHovered] = accentHover;
     style.Colors[ImGuiCol_ButtonActive] = accentActive;
@@ -662,8 +984,6 @@ void ApplyCustomTheme(ImGuiStyle& style) {
     style.Colors[ImGuiCol_HeaderHovered] = accentHover;
     style.Colors[ImGuiCol_HeaderActive] = accentActive;
     style.Colors[ImGuiCol_CheckMark] = ImVec4(0.92f, 0.95f, 0.98f, 1.0f);
-    style.Colors[ImGuiCol_SliderGrab] = ImVec4(0.88f, 0.92f, 1.0f, 1.0f);
-    style.Colors[ImGuiCol_SliderGrabActive] = accentActive;
     style.Colors[ImGuiCol_Separator] = ImVec4(0.25f, 0.27f, 0.32f, 1.0f);
     style.Colors[ImGuiCol_Text] = ImVec4(0.90f, 0.94f, 0.98f, 1.0f);
     style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.64f, 0.70f, 1.0f);

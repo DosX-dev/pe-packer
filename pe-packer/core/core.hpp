@@ -14,6 +14,7 @@
 #include "../asmjit/src/asmjit/asmjit.h"
 #include "../handler/handler.hpp"
 #include "../utils/arguments.hpp"
+#include "arch_utils.hpp"
 
 class c_core
 {
@@ -30,6 +31,18 @@ public:
 
 	asmjit::CodeHolder* get_codeHolder() {
 		return m_codeHolder.get();
+	}
+
+	bool is_x64() const {
+		return arch_utils::is_x64(m_peImage.get());
+	}
+
+	bool is_x86() const {
+		return arch_utils::is_x86(m_peImage.get());
+	}
+
+	uintptr_t get_image_base() const {
+		return arch_utils::get_image_base(m_peImage.get());
 	}
 
 	struct xor_target_t {
@@ -61,6 +74,10 @@ public:
 	asmjit::x86::Gp get_rand_reg();
 
 	asmjit::x86::Gp get_rand_lower_reg();
+
+	arch_utils::arch_regs get_arch_regs() const {
+		return arch_utils::get_arch_regs(m_assembler.get(), is_x64());
+	}
 
 	bool obf_call_oep = false;
 	bool obf_anti_disasm = false;

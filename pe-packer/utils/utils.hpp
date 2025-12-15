@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <random>
+#include <chrono>
 
 inline int random_value(int from, int to) {
     std::random_device dev;
@@ -7,6 +8,14 @@ inline int random_value(int from, int to) {
     std::uniform_int_distribution<std::mt19937::result_type> dist6(from, to);
 
     return dist6(rng);
+}
+
+inline uintptr_t random_xor_key() {
+    uintptr_t key = 0;
+
+    key = random_value(0x100, 0x400);
+
+    return key;
 }
 
 inline void enable_virtual_terminal_processing() {
