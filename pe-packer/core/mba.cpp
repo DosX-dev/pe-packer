@@ -41,14 +41,34 @@ void c_mba::mba_code(c_mba::options opt) {
 		bool is64 = m_core.is_x64();
 
 		Label new_label = m_core.get_assembler()->newLabel();
-		gen_math_operations();
-
-		// create new jump equal to label
+		
+		// setup comparison to ensure je works correctly
+		// use a register that won't conflict with critical registers
+		auto temp_reg = m_core.get_rand_reg();
+		// ensure temp_reg is not base_ptr or stack_ptr
+		while (temp_reg == regs.base_ptr || temp_reg == regs.stack_ptr) {
+			temp_reg = m_core.get_rand_reg();
+		}
+		
+		// set up a comparison that will always be false (ensuring je never jumps)
+		// this makes the code path deterministic
+		m_core.get_assembler()->mov(temp_reg, 1);
+		m_core.get_assembler()->cmp(temp_reg, 0);
+		
+		// create new jump equal to label (will never jump, but obfuscates)
 		m_core.get_assembler()->je(new_label);
 
-		// load x and y into regs (используем архитектурно-независимые регистры)
+		// load x and y into regs (ensure they don't conflict with critical regs)
 		auto reg_x = m_core.get_rand_reg();
 		auto reg_y = m_core.get_rand_reg();
+		// ensure reg_x and reg_y don't conflict with critical registers
+		while (reg_x == regs.base_ptr || reg_x == regs.stack_ptr || reg_x == regs.base || reg_x == regs.counter) {
+			reg_x = m_core.get_rand_reg();
+		}
+		while (reg_y == regs.base_ptr || reg_y == regs.stack_ptr || reg_y == regs.base || reg_y == regs.counter || reg_y == reg_x) {
+			reg_y = m_core.get_rand_reg();
+		}
+		
 		m_core.get_assembler()->mov(regs.temp1, reg_x);
 		m_core.get_assembler()->mov(regs.counter, reg_y);
 
@@ -72,6 +92,9 @@ void c_mba::mba_code(c_mba::options opt) {
 		m_core.get_assembler()->push(regs.temp1);
 		m_core.get_assembler()->mov(regs.counter, regs.temp1);
 		m_core.get_assembler()->xor_(regs.counter, reg_x);
+		
+		// clean up stack: pop the value we pushed
+		m_core.get_assembler()->pop(regs.temp1);
 
 		// its loc
 		m_core.get_assembler()->bind(new_label);
@@ -93,7 +116,13 @@ void c_mba::mba_code(c_mba::options opt) {
 
 		Label new_label = m_core.get_assembler()->newLabel();
 
-		gen_math_operations();
+		auto temp_reg = m_core.get_rand_reg();
+		while (temp_reg == regs.base_ptr || temp_reg == regs.stack_ptr) {
+			temp_reg = m_core.get_rand_reg();
+		}
+		
+		m_core.get_assembler()->mov(temp_reg, 1);
+		m_core.get_assembler()->cmp(temp_reg, 0);
 
 		// create new jump equal to label
 		m_core.get_assembler()->je(new_label);
@@ -101,6 +130,14 @@ void c_mba::mba_code(c_mba::options opt) {
 		// load x and y into regs
 		auto reg_x = m_core.get_rand_reg();
 		auto reg_y = m_core.get_rand_reg();
+		// ensure reg_x and reg_y don't conflict with critical registers
+		while (reg_x == regs.base_ptr || reg_x == regs.stack_ptr || reg_x == regs.base || reg_x == regs.counter) {
+			reg_x = m_core.get_rand_reg();
+		}
+		while (reg_y == regs.base_ptr || reg_y == regs.stack_ptr || reg_y == regs.base || reg_y == regs.counter || reg_y == reg_x) {
+			reg_y = m_core.get_rand_reg();
+		}
+		
 		m_core.get_assembler()->mov(regs.temp1, reg_x);
 		m_core.get_assembler()->mov(regs.counter, reg_y);
 
@@ -124,6 +161,9 @@ void c_mba::mba_code(c_mba::options opt) {
 		m_core.get_assembler()->push(regs.temp1);
 		m_core.get_assembler()->mov(regs.counter, regs.temp1);
 		m_core.get_assembler()->xor_(regs.counter, reg_x);
+		
+		// clean up stack: pop the value we pushed
+		m_core.get_assembler()->pop(regs.temp1);
 
 		// its loc
 		m_core.get_assembler()->bind(new_label);
@@ -145,12 +185,28 @@ void c_mba::mba_code(c_mba::options opt) {
 
 		Label new_label = m_core.get_assembler()->newLabel();
 
+		auto temp_reg = m_core.get_rand_reg();
+		while (temp_reg == regs.base_ptr || temp_reg == regs.stack_ptr) {
+			temp_reg = m_core.get_rand_reg();
+		}
+		
+		m_core.get_assembler()->mov(temp_reg, 1);
+		m_core.get_assembler()->cmp(temp_reg, 0);
+
 		// create new jump equal to label
 		m_core.get_assembler()->je(new_label);
 
 		// load x and y into regs
 		auto reg_x = m_core.get_rand_reg();
 		auto reg_y = m_core.get_rand_reg();
+
+		while (reg_x == regs.base_ptr || reg_x == regs.stack_ptr || reg_x == regs.base || reg_x == regs.counter) {
+			reg_x = m_core.get_rand_reg();
+		}
+		while (reg_y == regs.base_ptr || reg_y == regs.stack_ptr || reg_y == regs.base || reg_y == regs.counter || reg_y == reg_x) {
+			reg_y = m_core.get_rand_reg();
+		}
+		
 		m_core.get_assembler()->mov(regs.temp1, reg_x);
 		m_core.get_assembler()->mov(regs.counter, reg_y);
 
@@ -176,6 +232,9 @@ void c_mba::mba_code(c_mba::options opt) {
 		m_core.get_assembler()->push(regs.temp1);
 		m_core.get_assembler()->mov(regs.counter, regs.temp1);
 		m_core.get_assembler()->xor_(regs.counter, reg_x);
+		
+		// clean up stack: pop the value we pushed
+		m_core.get_assembler()->pop(regs.temp1);
 
 		// its loc
 		m_core.get_assembler()->bind(new_label);
