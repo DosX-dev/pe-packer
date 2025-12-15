@@ -1,10 +1,10 @@
-# Packer for x64 and x86 Portable Executable applications 
+# Packer for x86 and x64 Portable Executable applications 
 
 ## What is this?
 This packer works by encrypting a specific code places, create new section that will be contain the stub for decrypting and the necessary obfuscation. \
 Packer has one common stub that will be obfuscated using several methods which has adverse effects on analyzers/decompilers.
 
-X64 and x86 binaries are currently supported.
+X86 and x64 binaries are currently supported.
 
 ## Optional arguments
 Packer by default works off a command line. Listed below are the arguments requried to use it.
