@@ -173,7 +173,7 @@ void c_core::insert_runtime_xor_stub(xor_target_t xor_target)
 
 void c_core::xor_sections(std::string sec_to_xor)
 {
-	if (!obf_func_pack) {
+	if (!obf_xor_sections) {
 		return;
 	}
 
@@ -293,7 +293,7 @@ void c_core::process()
 			m_assembler->mov(regs.stack_ptr, regs.temp2);
 			//m_assembler->db(0xCC); 
 
-			m_assembler->call(regs.temp1);
+			m_assembler->jmp(regs.temp1);
 
 			if (obf_anti_disasm)
 				adasm_obj.jmp_label_skip();
@@ -333,7 +333,7 @@ void c_core::process()
 			m_assembler->add(regs.temp1, regs.stack_ptr);
 			m_assembler->mov(regs.stack_ptr, regs.temp2);
 
-			m_assembler->call(regs.temp1);
+			m_assembler->jmp(regs.temp1);
 
 			if (obf_fake_instr) {
 				for (int i = 0; i < random_value(0x1, 0x400); ++i) {
