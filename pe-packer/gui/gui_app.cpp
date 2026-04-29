@@ -121,6 +121,7 @@ static bool BrowseInputFile(GuiState& state);
 static bool BrowseOutputFile(GuiState& state);
 static bool AnimatedCheckbox(const char* label, bool* value);
 static bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue);
+static bool GradientButton(const char* label, const ImVec2& size, ImVec4 baseL, ImVec4 baseR, ImVec4 hoverL, ImVec4 hoverR);
 static void SetDefaultOutputFromInput(GuiState& state);
 static void CopyStringToBuffer(const std::string& value, std::array<char, MAX_PATH>& buffer);
 static void CopyShortStringToBuffer(const std::string& value, std::array<char, MAX_PATH>& buffer);
@@ -460,6 +461,140 @@ bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue
     return changed;
 }
 
+// especially buttons :D but need to improve
+static bool GradientButton(const char* label, const ImVec2& size, ImVec4 baseL, ImVec4 baseR, ImVec4 hoverL, ImVec4 hoverR) {
+    auto hash32 = [](uint32_t x) -> uint32_t {
+        x ^= x >> 16;
+        x *= 0x7FEB352Du;
+        x ^= x >> 15;
+        x *= 0x846CA68Bu;
+        x ^= x >> 16;
+        return x;
+    };
+    auto hash01 = [&](uint32_t x) -> float {
+        return (hash32(x) & 0x00FFFFFFu) / 16777215.0f;
+    };
+
+    ImGui::PushID(label);
+    const ImGuiID id = ImGui::GetID("##grad_btn");
+
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImVec2 s = size;
+    if (s.x <= 0.0f) s.x = ImGui::CalcItemWidth();
+    if (s.y <= 0.0f) s.y = ImGui::GetFrameHeight();
+
+    const bool pressed = ImGui::InvisibleButton("##grad_btn", s);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+
+    // maybe smooth... work not stable
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID animId = id ^ 0xA8D3C2F1u;
+    float t = st->GetFloat(animId, hovered ? 1.0f : 0.0f);
+    const float target = hovered ? 1.0f : 0.0f;
+    const float speed = active ? 20.0f : 12.0f;
+    const float lerp = (std::min)(1.0f, ImGui::GetIO().DeltaTime * speed);
+    t = t + (target - t) * lerp;
+    st->SetFloat(animId, t);
+
+    auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+    auto mix = [&](const ImVec4& a, const ImVec4& b, float x) -> ImVec4 {
+        x = clamp01(x);
+        return ImVec4(a.x + (b.x - a.x) * x, a.y + (b.y - a.y) * x, a.z + (b.z - a.z) * x, 1.0f);
+    };
+
+    const ImVec4 baseMid((baseL.x + baseR.x) * 0.5f, (baseL.y + baseR.y) * 0.5f, (baseL.z + baseR.z) * 0.5f, 1.0f);
+    const ImVec4 hoverMid((hoverL.x + hoverR.x) * 0.5f, (hoverL.y + hoverR.y) * 0.5f, (hoverL.z + hoverR.z) * 0.5f, 1.0f);
+    ImVec4 mid = mix(baseMid, hoverMid, t);
+    if (active) {
+        mid.x *= 0.92f; mid.y *= 0.92f; mid.z *= 0.92f;
+    }
+
+    const float rounding = s.y * 0.45f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p2(pos.x + s.x, pos.y + s.y);
+
+    // rounded rect
+    dl->AddRectFilled(pos, p2, ImGui::GetColorU32(mid), rounding);
+
+    // animated on hover
+    ImVec4 top = mid;
+    top.x = clamp01(top.x + 0.10f * t);
+    top.y = clamp01(top.y + 0.10f * t);
+    top.z = clamp01(top.z + 0.14f * t);
+    top.w = 0.26f + 0.26f * t;
+    dl->AddRectFilled(pos, ImVec2(p2.x, pos.y + s.y * 0.54f), ImGui::GetColorU32(top), rounding, ImDrawFlags_RoundCornersTop);
+
+    ImVec4 bot = mid;
+    bot.w = 0.22f + 0.18f * t;
+    dl->AddRectFilled(ImVec2(pos.x, pos.y + s.y * 0.56f), p2,
+        ImGui::GetColorU32(ImVec4(bot.x * 0.75f, bot.y * 0.75f, bot.z * 0.75f, bot.w)),
+        rounding,
+        ImDrawFlags_RoundCornersBottom);
+
+    // pif-paf
+    {
+        const ImGuiID hoverId = id ^ 0xE11A7E01u;
+        const ImGuiID burstId = id ^ 0xB0757001u;
+        const ImGuiID burstXId = id ^ 0xB0757002u;
+        const ImGuiID burstYId = id ^ 0xB0757003u;
+
+        const bool wasHovered = st->GetBool(hoverId, false);
+        if (hovered && !wasHovered) {
+            st->SetFloat(burstId, 1.0f); // trigger burst once on hover-enter
+            ImVec2 mp = ImGui::GetIO().MousePos;
+            if (mp.x < pos.x) mp.x = pos.x;
+            if (mp.y < pos.y) mp.y = pos.y;
+            if (mp.x > p2.x) mp.x = p2.x;
+            if (mp.y > p2.y) mp.y = p2.y;
+            st->SetFloat(burstXId, mp.x);
+            st->SetFloat(burstYId, mp.y);
+        }
+        st->SetBool(hoverId, hovered);
+
+        float burst = st->GetFloat(burstId, 0.0f);
+        if (burst > 0.0f) {
+            burst = (std::max)(0.0f, burst - ImGui::GetIO().DeltaTime * 4.2f);
+            st->SetFloat(burstId, burst);
+
+            const float p = 1.0f - burst; // 0..1
+            const ImVec2 c(st->GetFloat(burstXId, pos.x + s.x * 0.5f), st->GetFloat(burstYId, pos.y + s.y * 0.5f));
+            const float maxR = (std::min)(s.x, s.y) * 0.86f;
+            const float r = 8.0f + maxR * p;
+            const float aBurst = 0.38f * (1.0f - p) * (0.55f + 0.45f * t);
+
+            dl->PushClipRect(pos, p2, true);
+            dl->AddCircle(c, r, ImGui::GetColorU32(ImVec4(0.45f, 0.62f, 0.95f, aBurst)), 64, 2.6f);
+            dl->AddCircle(c, r * 0.78f, ImGui::GetColorU32(ImVec4(0.98f, 0.88f, 0.55f, aBurst * 0.75f)), 64, 1.8f);
+
+            for (int k = 0; k < 7; ++k) {
+                const float ang = (hash01(static_cast<uint32_t>(id) ^ static_cast<uint32_t>(k * 911u)) * 6.2831853f);
+                const float len = 6.0f + 10.0f * hash01(static_cast<uint32_t>(id) ^ static_cast<uint32_t>(k * 131u));
+                const ImVec2 dir(std::cos(ang), std::sin(ang));
+                const ImVec2 a0(c.x + dir.x * (r * 0.35f), c.y + dir.y * (r * 0.35f));
+                const ImVec2 a1(c.x + dir.x * (r * 0.35f + len), c.y + dir.y * (r * 0.35f + len));
+                dl->AddLine(a0, a1, ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, aBurst * 0.95f)), 2.0f);
+            }
+            dl->PopClipRect();
+        }
+    }
+
+    dl->AddRect(pos, p2, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.10f + 0.25f * t)), rounding, 0, 1.0f);
+    if (t > 0.01f) {
+        dl->AddRect(ImVec2(pos.x - 1.0f, pos.y - 1.0f), ImVec2(p2.x + 1.0f, p2.y + 1.0f),
+            ImGui::GetColorU32(ImVec4(0.45f, 0.62f, 0.95f, 0.12f * t)), rounding + 1.0f, 0, 2.4f);
+        dl->AddRect(ImVec2(pos.x - 3.0f, pos.y - 3.0f), ImVec2(p2.x + 3.0f, p2.y + 3.0f),
+            ImGui::GetColorU32(ImVec4(0.35f, 0.80f, 0.95f, 0.06f * t)), rounding + 3.0f, 0, 3.0f);
+    }
+
+    const ImVec2 ts = ImGui::CalcTextSize(label);
+    const ImVec2 tp(pos.x + (s.x - ts.x) * 0.5f, pos.y + (s.y - ts.y) * 0.5f - 1.0f);
+    dl->AddText(tp, ImGui::GetColorU32(ImVec4(0.90f, 0.94f, 0.98f, 1.0f)), label);
+
+    ImGui::PopID();
+    return pressed;
+}
+
 void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
@@ -638,19 +773,15 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             }
             
             ImGui::SameLine();
-            if (ImGui::Button("##browse_btn", ImVec2(browseWidth, inputHeight)) && browseFn()) {
+            if (GradientButton(
+                    "Browse",
+                    ImVec2(browseWidth, inputHeight),
+                    ImVec4(0.12f, 0.14f, 0.18f, 1.0f),
+                    ImVec4(0.16f, 0.18f, 0.22f, 1.0f),
+                    ImVec4(0.18f, 0.21f, 0.28f, 1.0f),
+                    ImVec4(0.24f, 0.28f, 0.36f, 1.0f)) && browseFn()) {
                 editedFromInput = true;
             }
-            const ImVec2 btnMin = ImGui::GetItemRectMin();
-            const ImVec2 btnMax = ImGui::GetItemRectMax();
-            const ImVec2 btnSize(btnMax.x - btnMin.x, btnMax.y - btnMin.y);
-            const char* browseText = "Browse";
-            const ImVec2 textSize = ImGui::CalcTextSize(browseText);
-            const ImVec2 textPos(
-                btnMin.x + (btnSize.x - textSize.x) * 0.5f,
-                btnMin.y + (btnSize.y - textSize.y) * 0.5f - 1.0f
-            );
-            ImGui::GetWindowDrawList()->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), browseText);
             ImGui::PopID();
             return editedFromInput;
         };
@@ -898,9 +1029,17 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             }
             float startX = ImGui::GetCursorPosX() + offset;
             ImGui::SetCursorPosX(startX);
+           
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 6.0f);
             
             ImGui::BeginDisabled(needsOepAslrWarning);
-            if (ImGui::Button("Pack", ImVec2(buttonWidth, 0.0f))) {
+            if (GradientButton(
+                    "Pack",
+                    ImVec2(buttonWidth, 0.0f),
+                    ImVec4(0.10f, 0.18f, 0.40f, 1.0f),
+                    ImVec4(0.14f, 0.26f, 0.56f, 1.0f),
+                    ImVec4(0.20f, 0.38f, 0.78f, 1.0f),
+                    ImVec4(0.32f, 0.56f, 0.96f, 1.0f))) {
                 lastSuccess = ExecutePacking(state, statusMessage);
             }
             ImGui::EndDisabled();
@@ -1057,6 +1196,13 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         ImGui::SetCursorScreenPos(ImVec2(min.x + 8.0f, childStartY));
 
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+		// scrollbar styling
+        ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 7.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, 18.0f);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.32f, 0.38f, 0.46f, 0.55f));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.38f, 0.46f, 0.56f, 0.75f));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, ImVec4(0.45f, 0.62f, 0.95f, 0.85f));
         if (ImGui::BeginChild("log_region", ImVec2(childWidth, childHeight), false, ImGuiWindowFlags_NoBackground)) {
             if (state.logEntries.empty()) {
                 ImGui::TextDisabled("Logs will appear here.");
@@ -1101,7 +1247,8 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             }
         }
         ImGui::EndChild();
-        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
+        ImGui::PopStyleVar(3);
     }
     ImGui::End();
 }
