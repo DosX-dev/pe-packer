@@ -1,4 +1,4 @@
-# pe-packer — PE packer for x86/x64
+# PE packer for x86/x64
 
 ## What is this?
 `pe-packer` takes a Windows Portable Executable (PE) file, makes a new executable section with a runtime stub, and applies a set of optional obfuscation/encryption techniques.
@@ -47,7 +47,7 @@ pe-packer.exe input.exe output.exe 4 -fpack 0x401040 0x401072
 | `-noaslr`   | Clear the `DYNAMIC_BASE` flag (disable ASLR) in the output image.                      |                 |
 
 ## GUI Interface
-<img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/c428a01d-842f-4b15-92d4-e18693582cee" />
+<img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/b73db14d-1022-4492-8613-886437d594d9" />
 
 ### Obfuscation level mapping
 The GUI slider is `1..100` and is mapped to **level 1..10**:
@@ -64,7 +64,8 @@ The GUI slider is `1..100` and is mapped to **level 1..10**:
 ![Pasted image 20250701214338](https://github.com/user-attachments/assets/5145b480-4555-460c-ada2-bd2a56bec2b3)
 
 ## Output
-![Pasted image 20250701214543](https://github.com/user-attachments/assets/4d9f3f37-c7cd-4153-849e-c5cd439787fd)
+<img width="655" height="390" alt="image" src="https://github.com/user-attachments/assets/7ca56910-4837-4cf2-a8ca-1a7bd0432f8a" />
+
 
 > [!NOTE]
 > `-fpack` takes two additional arguments: start and end address of the function range (VA as seen in a debugger).
