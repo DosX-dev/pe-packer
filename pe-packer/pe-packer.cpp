@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/core.hpp"
+#include "core/mutation_profile.hpp"
 #include "gui/gui_app.hpp"
 #include "utils/utils.hpp"
 
@@ -91,13 +92,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     time(&ctime);
     srand(static_cast<unsigned>(ctime));
 
-    uint32_t mut_count = static_cast<uint32_t>(atoi(argv[3])) * 10;
+    const uint32_t obfuscation_level = mutation_profile::clamp_level(static_cast<uint32_t>(atoi(argv[3])));
 
     try
     {
-        auto packer = std::make_unique<c_core>(argv[1], argv[2], mut_count);
+        auto packer = std::make_unique<c_core>(argv[1], argv[2], obfuscation_level);
 
-        print_info("Mutations count: %i\n", mut_count);
+        print_info("Complexity percentage: %u\n", obfuscation_level);
         packer->process();
     }
     catch(const std::exception& ex)

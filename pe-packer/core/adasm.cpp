@@ -1,19 +1,25 @@
 #include "adasm.hpp"
-#include "../utils/utils.hpp"
 
-using namespace asmjit;
+#include "../utils/utils.hpp"
 
 c_adasm::c_adasm(c_core& g_core) : m_core(g_core) {}
 
 void c_adasm::jmp_label_skip() {
-	Label skip_cc = m_core.get_assembler()->newLabel();
-	m_core.get_assembler()->jz(skip_cc);
-	m_core.get_assembler()->jnz(skip_cc);
-	m_core.get_assembler()->db(0xE9);
-	if (m_core.obf_fake_instr) {
-		for (int i = 0; i < random_value(0x1, 0x100); ++i) {
-			m_core.get_assembler()->db(random_value(0x10, 0xFF));
-		}
-	}
-	m_core.get_assembler()->bind(skip_cc);
+    auto& emitter = m_core.get_emitter();
+    const stub_emit::Label skip_cc = emitter.new_label();
+    emitter.jz(skip_cc);
+    emitter.jnz(skip_cc);
+    emitter.db(0xE9);
+
+    if (m_core.obf_fake_instr) {
+        const int junk_count = m_core.random_in_profile_range(
+            static_cast<int>(m_core.obfuscation_profile().adasm_junk_min),
+            static_cast<int>(m_core.obfuscation_profile().adasm_junk_max)
+        );
+        for (int i = 0; i < junk_count; ++i) {
+            emitter.db(static_cast<std::uint8_t>(random_value(0x10, 0xFF)));
+        }
+    }
+
+    emitter.bind(skip_cc);
 }

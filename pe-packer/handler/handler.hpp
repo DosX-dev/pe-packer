@@ -3,8 +3,9 @@
 #include <functional>
 #include <cstdarg>
 #include <cstdio>
-#include <functional>
 #include <string>
+#include <sstream>
+#include <stdexcept>
 
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[31m"
@@ -84,9 +85,9 @@ inline void print_info(const char* fmt, ...) {
 	va_end(args);
 }
 
-[[noreturn]] inline void print_error(const std::string& msg) {
+inline void log_error(const std::string& msg) {
     printf("[ " COLOR_RED "error" COLOR_RESET " ] %s", msg.c_str());
-    
+
     if (g_logCallback) {
         std::string logMsg = "[ error ] " + msg;
         if (!logMsg.empty() && logMsg.back() == '\n') {
@@ -94,18 +95,14 @@ inline void print_info(const char* fmt, ...) {
         }
         g_logCallback(logMsg, false);
     }
-    
-    std::stringstream ss;
-    ss << msg;
-    throw std::runtime_error(ss.str());
 }
 
-#define error_handling(condition, from, text) \
-    try { \
-        if (condition) { \
-            throw std::exception(text); \
-        } \
-    } catch (std::exception& ex) { \
-        MessageBoxA(NULL, ex.what(), from, 0x00000010L); \
-        exit(0); \
-    } 
+// throws std::runtime_error
+[[noreturn]] inline void fail_error(const std::string& msg) {
+    log_error(msg);
+    throw std::runtime_error(msg);
+}
+
+[[noreturn]] inline void print_error(const std::string& msg) {
+    fail_error(msg);
+}
