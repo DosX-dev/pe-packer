@@ -1,682 +1,545 @@
 #include "core.hpp"
+
 #include "../utils/utils.hpp"
-#include "../asmjit/src/asmjit/arm/a64operand.h"
-#include "mba.hpp"
 #include "adasm.hpp"
+#include "mba.hpp"
 
-using namespace asmjit;
-
-c_core::c_core(std::string input_file, std::string output_file, std::uint32_t mutations_counter)
+c_core::c_core(std::string input_file, std::string output_file, std::uint32_t obfuscation_level)
 {
-	m_input = input_file;
-	m_output = output_file;
-	m_mutations = mutations_counter;
+    m_input = std::move(input_file);
+    m_output = std::move(output_file);
+    m_level = mutation_profile::clamp_level(obfuscation_level);
+    m_profile = mutation_profile::profile_for_level(m_level);
 
-	std::ifstream pe_file(m_input, std::ios::in | std::ios::binary);
-	if (!pe_file) {
-		print_error("Binary is not PE file\n");
-	}
+    const pe_raw::ParseFileResult parsed = pe_raw::parse_pe_file(m_input);
+    if (!parsed.ok()) {
+        throw std::runtime_error(parsed.error_message);
+    }
+    m_peView = std::move(*parsed.view);
 
-	m_peImage = std::make_unique<pe_bliss::pe_base>(pe_bliss::pe_factory::create_pe(pe_file));
-	
-	pe_bliss::pe_type peType = m_peImage->get_pe_type();
-	if (peType != pe_bliss::pe_type_32 && peType != pe_bliss::pe_type_64) {
-		print_error("Unsupported PE architecture\n");
-	}
+    if (pe_raw::has_clr_directory(m_peView)) {
+        throw std::runtime_error(".NET binaries are not supported");
+    }
 
-	bool clr_dir = m_peImage->directory_exists(14);
-	if (clr_dir) {
-		print_error("CLR directory found, .NET binary is not supported yet\n");
-	}
+    // init emmiter
+    m_emitter = std::make_unique<stub_emit::c_stub_emitter>(m_peView.is64);
 
-	JitRuntime jitRt;
-	Environment targetEnv = jitRt.environment();
-	
-	// detect arch type
-	if (peType == pe_bliss::pe_type_64) {
-		targetEnv.setArch(Arch::kX64);
-		print_info("Detected x64 architecture\n");
-	} else {
-		targetEnv.setArch(Arch::kX86);
-		print_info("Detected x86 architecture\n");
-	}
-	
-	targetEnv.setSubArch(SubArch::kUnknown);
+    if (m_peView.is64) {
+        print_info("Detected x64 architecture\n");
+    } else {
+        print_info("Detected x86 architecture\n");
+    }
 
-	m_codeHolder = std::make_unique<CodeHolder>();
-	Error init_asmjit = m_codeHolder->init(targetEnv, jitRt.cpuFeatures());
+    print_custom("emit", "Stub emitter initialized\n");
 
-	if (init_asmjit != kErrorOk) {
-		print_error("Failed initialization\n");
-	}
+    xor_target_t xor_target{};
 
-	print_custom("asmjit", "Successfully asmjit initialization\n");
+    if (arguments::has("-noaslr")) {
+        if (m_peView.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) {
+            pe_raw::clear_aslr(m_peView);
+            print_info("ASLR flag has been removed\n");
+        } else {
+            print_warning("ASLR flag not find yet\n");
+        }
+    }
 
-	xor_target_t xor_target;
+    if (arguments::has("-oep_call")) {
+        print_info("OEP call obfuscation is enable\n");
+        obf_call_oep = true;
+    }
 
-	auto dll_char = m_peImage->get_dll_characteristics();
+    if (arguments::has("-adasm")) {
+        print_info("Anti-disassembly obfuscation is enabled\n");
+        obf_anti_disasm = true;
+    }
 
-	if (arguments::has("-noaslr")) {
-		if (dll_char & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) {
-			dll_char &= ~IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+    if (arguments::has("-mba")) {
+        print_info("Mixed Boolean Arithmetic obfuscation is enabled\n");
+        obf_mba = true;
+    }
 
-			m_peImage->set_dll_characteristics(dll_char);
-			print_info("ASLR flag has been removed\n");
-		} else
-			print_warning("ASLR flag not find yet\n");
-	}
+    if (arguments::has("-senc")) {
+        print_info("Sections encryption is enabled\n");
+        obf_xor_sections = true;
+    }
 
-	if (arguments::has("-oep_call")) {
-		if (dll_char & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) {
-			print_info("OEP call obfuscation cannot be enabled because PE file has a ASLR flag\n");
-		}
-		else {
-			print_info("OEP call obfuscation is enable\n");
-			obf_call_oep = true;
-		}
-	}
+    if (arguments::has("-finstr")) {
+        print_info("Fake instructions is enabled\n");
+        obf_fake_instr = true;
+    }
 
-	if (arguments::has("-adasm")) {
-		print_info("Anti-disassembly obfuscation is enabled\n");
-		obf_anti_disasm = true;
-	}
+    if (arguments::has("-fpack")) {
+        const std::string addr_start = arguments::get_after("-fpack", 0);
+        const std::string addr_end = arguments::get_after("-fpack", 1);
+        const std::uint8_t key = static_cast<std::uint8_t>(random_value(0x10, 0xFF));
 
-	if (arguments::has("-mba")) {
-		print_info("Mixed Boolean Arithmetic obfuscation is enabled\n");
-		obf_mba = true;
-	}
-
-	if (arguments::has("-senc")) {
-		print_info("Sections encryption is enabled\n");
-		obf_xor_sections = true;
-	}
-
-	if (arguments::has("-finstr")) {
-		print_info("Fake instructions is enabled\n");
-		obf_fake_instr = true;
-	}
-
-	if (arguments::has("-fpack")) {
-		std::string addr_start = arguments::get_after("-fpack", 0);
-		std::string addr_end = arguments::get_after("-fpack", 1);
-		std::uint8_t key = random_value(0x10, 0xFF);
-
-		if (!addr_start.empty() && !addr_end.empty()) {
-
-			print_info("Packing functions from %s to %s enabled\n", addr_start.c_str(), addr_end.c_str());
-
-			obf_func_pack = true;
-
-			xor_target.func_start = std::stoul(addr_start, nullptr, 16);
-			xor_target.func_end = std::stoul(addr_end, nullptr, 16);
-
-			obf_xor_targets.push_back({ xor_target.func_start, xor_target.func_end, key });
-		}
-		else {
-			print_warning("Argument -fpack must be followed by two addresses [START_ADDR] [END_ADDR]\n");
-		}
-	}
-
-	m_assembler = std::make_unique<x86::Assembler>(m_codeHolder.get());
+        if (!addr_start.empty() && !addr_end.empty()) {
+            print_info("Packing functions from %s to %s enabled\n", addr_start.c_str(), addr_end.c_str());
+            obf_func_pack = true;
+            xor_target.func_start = std::stoul(addr_start, nullptr, 16);
+            xor_target.func_end = static_cast<std::uint32_t>(std::stoul(addr_end, nullptr, 16));
+            obf_xor_targets.push_back({ xor_target.func_start, xor_target.func_end, key });
+        } else {
+            print_warning("Argument -fpack must be followed by two addresses [START_ADDR] [END_ADDR]\n");
+        }
+    }
 }
 
 void c_core::xor_function_range(xor_target_t xor_target)
 {
-	if (!obf_func_pack || xor_target.func_start >= xor_target.func_end)
-		return;
+    if (!obf_func_pack || xor_target.func_start >= xor_target.func_end) {
+        return;
+    }
 
-	std::uint32_t func_size = static_cast<std::uint32_t>(xor_target.func_end - xor_target.func_start);
-	std::uint8_t key = xor_target.xor_key;
-
-	uintptr_t image_base = get_image_base();
-
-	for (auto& sec : m_peImage->get_image_sections()) {
-		std::uintptr_t sec_base = image_base + sec.get_virtual_address();
-		std::uintptr_t sec_end = sec_base + sec.get_raw_data().size();
-
-		if (xor_target.func_start >= sec_base && xor_target.func_end <= sec_end) {
-			std::size_t offset = xor_target.func_start - sec_base;
-			std::string& data = sec.get_raw_data();
-			for (std::size_t i = 0; i < func_size; ++i)
-				data[offset + i] ^= key;
-
-			break;
-		}
-	}
+    // xor by va range
+    pe_raw::xor_region_by_va(
+        m_peView,
+        xor_target.func_start,
+        xor_target.func_end,
+        xor_target.xor_key
+    );
 }
 
 void c_core::insert_runtime_xor_stub(xor_target_t xor_target)
 {
-	if (!obf_func_pack)
-		return;
+    if (!obf_func_pack) {
+        return;
+    }
 
-	arch_utils::arch_regs regs = get_arch_regs();
+    auto& emitter = get_emitter();
+    const arch_utils::arch_regs regs = get_arch_regs();
 
-	m_assembler->mov(regs.base, xor_target.func_start);     // rcx/ecx = start address
-	m_assembler->mov(regs.counter, xor_target.func_end - xor_target.func_start);   // rbx/ebx = size
-	m_assembler->mov(regs.key, xor_target.xor_key);         // al = key
+    emitter.mov(regs.base, xor_target.func_start);
+    emitter.mov(regs.counter, xor_target.func_end - xor_target.func_start);
+    emitter.mov(regs.key, xor_target.xor_key);
 
-	Label loop_start = m_assembler->newLabel();
-	Label loop_end = m_assembler->newLabel();
+    const stub_emit::Label loop_start = emitter.new_label();
+    const stub_emit::Label loop_end = emitter.new_label();
 
-	m_assembler->bind(loop_start);
-	m_assembler->cmp(regs.counter, 0);
-	m_assembler->jz(loop_end);
-	m_assembler->xor_(x86::byte_ptr(regs.base), regs.key);
-	m_assembler->inc(regs.base);
-	m_assembler->dec(regs.counter);
-	m_assembler->jmp(loop_start);
-	m_assembler->bind(loop_end);
+    emitter.bind(loop_start);
+    emitter.cmp(regs.counter, 0);
+    emitter.jz(loop_end);
+    emitter.xor_byte_ptr(regs.base, stub_emit::Reg(emit::rx::rax));
+    emitter.inc(regs.base);
+    emitter.dec(regs.counter);
+    emitter.jmp(loop_start);
+    emitter.bind(loop_end);
 
-	print_info("Stub for func decryption has been inserted\n");
+    print_info("Stub for func decryption has been inserted\n");
 }
 
-void c_core::xor_sections(std::string sec_to_xor)
+void c_core::xor_sections(const std::string sec_to_xor)
 {
-	if (!obf_xor_sections) {
-		return;
-	}
+    if (!obf_xor_sections) {
+        return;
+    }
 
-	std::string* reloc_data = nullptr;
+    const std::uint8_t reloc_xor_key = static_cast<std::uint8_t>(random_value(1, 255));
+    pe_raw::xor_section_by_name(m_peView, sec_to_xor.c_str(), reloc_xor_key);
+    print_info("Section %s has been encrypted with key 0x%02x\n", sec_to_xor.c_str(), reloc_xor_key);
 
-	pe_bliss::section* reloc_secptr = nullptr;
+    const auto* section = pe_raw::section_by_name(m_peView, sec_to_xor.c_str());
+    if (!section) {
+        return;
+    }
 
-	for (auto& sec : m_peImage->get_image_sections()) {
-		if (sec.get_name() == sec_to_xor) {
-			reloc_secptr = &sec;
-			reloc_data = &sec.get_raw_data();
-			break;
-		}
-	}
+    const std::uint64_t reloc_va = get_image_base() + section->VirtualAddress;
+    const std::uint32_t reloc_size = section->SizeOfRawData;
 
-	std::uint8_t reloc_xor_key = static_cast<std::uint8_t>(random_value(1, 255));
+    auto& emitter = get_emitter();
+    const arch_utils::arch_regs regs = get_arch_regs();
 
-	if (reloc_data && !reloc_data->empty()) {
-		for (char& byte : *reloc_data) {
-			byte ^= reloc_xor_key;
-		}
-		print_info("Section %s has been encrypted with key 0x%02x\n", sec_to_xor.c_str(), reloc_xor_key);
-	}
+    emitter.mov(regs.base, reloc_va);
+    emitter.mov(regs.counter, reloc_size);
+    emitter.mov(regs.key, reloc_xor_key);
 
-	if (reloc_secptr) {
-		uintptr_t image_base = get_image_base();
-		uintptr_t reloc_va = reloc_secptr->get_virtual_address() + image_base;
-		uint32_t reloc_size = static_cast<uint32_t>(reloc_secptr->get_raw_data().size());
+    const stub_emit::Label loop_start = emitter.new_label();
+    const stub_emit::Label loop_end = emitter.new_label();
 
-		arch_utils::arch_regs regs = get_arch_regs();
+    emitter.bind(loop_start);
+    emitter.cmp(regs.counter, 0);
+    emitter.jz(loop_end);
+    emitter.xor_byte_ptr(regs.base, stub_emit::Reg(emit::rx::rax));
+    emitter.inc(regs.base);
+    emitter.dec(regs.counter);
+    emitter.jmp(loop_start);
+    emitter.bind(loop_end);
 
-		m_assembler->mov(regs.base, reloc_va);      // rcx/ecx = RVA(.reloc)
-		m_assembler->mov(regs.counter, reloc_size); // rbx/ebx = size
-		m_assembler->mov(regs.key, reloc_xor_key);  // al = key
-
-		Label loop_start = m_assembler->newLabel();
-		Label loop_end = m_assembler->newLabel();
-
-		m_assembler->bind(loop_start);
-		m_assembler->cmp(regs.counter, 0);
-		m_assembler->jz(loop_end);
-		m_assembler->xor_(x86::byte_ptr(regs.base), regs.key); // base ^= key
-		m_assembler->inc(regs.base);
-		m_assembler->dec(regs.counter);
-		m_assembler->jmp(loop_start);
-		m_assembler->bind(loop_end);
-
-		print_info("Stub for %s section decryption has been inserted\n", sec_to_xor.c_str());
-	}
+    print_info("Stub for %s section decryption has been inserted\n", sec_to_xor.c_str());
 }
 
 void c_core::process()
 {
-	size_t ep_addr = m_assembler->offset();
-	size_t idx_oep = random_value(0x1000, 0xFFFFFFFF);
-	uintptr_t image_base = get_image_base();
+    auto& emitter = get_emitter();
+    const std::uint32_t section_rva = pe_raw::peek_next_section_rva(m_peView);
+    emitter.set_section_rva(section_rva);
 
-	pe_bliss::section new_section;
-	const char* section_name = ".ptext";
+    const std::size_t ep_offset = emitter.offset();
+    const std::uint32_t idx_oep = random_value(0x1000, 0xFFFFFFFF);
+    const std::uint32_t original_oep_rva = m_peView.entry_point_rva;
 
-	arch_utils::arch_regs regs = get_arch_regs();
-	m_assembler->push(regs.base_ptr);
-	m_assembler->mov(regs.base_ptr, regs.stack_ptr); // set base pointer to stack pointer
-	
-	new_section.set_name(section_name);
-	new_section.readable(true).writeable(false).executable(true);
-	size_t codeSize = m_assembler->bufferCapacity();
-	if (codeSize == 0) {
-		print_error("Empty code section");
-	}
+    const arch_utils::arch_regs regs = get_arch_regs();
+    emitter.push(regs.base_ptr);
+    emitter.mov(regs.base_ptr, regs.stack_ptr);
 
-	new_section.get_raw_data().resize(codeSize);
+    std::uint64_t oep = m_peView.entry_point_rva;
+    const std::uint32_t oepvl_xor_key = (uint32_t)random_xor_key();
 
-	pe_bliss::section& pe_section = m_peImage->add_section(new_section);
-	m_codeHolder->_baseAddress = pe_section.get_virtual_address();
-	size_t oep = obf_call_oep ? m_peImage->get_ep() + image_base : m_peImage->get_ep();
-	size_t oepvl_xor_key = random_xor_key();
-	Label new_label = m_assembler->newLabel();
+    c_adasm adasm_obj(*this);
+    obfuscation_process();
 
-	c_adasm adasm_obj(*this);
+    if (obf_func_pack) {
+        pe_raw::set_section_characteristics(
+            m_peView,
+            ".text",
+            IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE
+        );
+        print_info("Section %s flags changed to RWX\n", ".text");
 
-	obfuscation_process();
+        for (const xor_target_t& target : obf_xor_targets) {
+            xor_function_range(target);
+            insert_runtime_xor_stub(target);
+        }
+    }
 
-	if (obf_func_pack) {
-		for (auto& sec : m_peImage->get_image_sections())
-		{
-			if (sec.get_name() == ".text")
-			{
-				sec.set_characteristics(0x40000000 | 0x80000000 | 0x20000000); // RWX
-				print_info("Section %s flags changed to RWX\n", sec.get_name().c_str());
-				break;
-			}
-		}
+    if (obf_anti_disasm) {
+        adasm_obj.jmp_label_skip();
+    }
 
-		for (const xor_target_t& target : obf_xor_targets) {
-			xor_function_range(target);
-			insert_runtime_xor_stub(target);
-		}
-	}
+    if (obf_call_oep) {
+        const arch_utils::oep_scratch_regs scratch = arch_utils::get_oep_scratch_regs(is_x64());
 
-	if (obf_anti_disasm)
-		adasm_obj.jmp_label_skip();
+        switch (rand() % 2) {
+        case 0:
+            oep -= idx_oep;
+            emitter.load_image_base(scratch.base);
+            emitter.mov(scratch.tmp, oep);
+            emitter.add(scratch.tmp, idx_oep);
+            emitter.add(scratch.base, scratch.tmp);
+            emitter.call(scratch.base);
+            break;
 
-	if (obf_call_oep) {
-		arch_utils::arch_regs regs = get_arch_regs();
-		
-		switch (rand() % 2) {
-		case 0:
+        case 1:
+            oep -= idx_oep;
+            {
+                const std::uint32_t xored = idx_oep ^ oepvl_xor_key;
+                emitter.load_image_base(scratch.base);
+                emitter.mov(scratch.idx, xored);
+                emitter.xor_(scratch.idx, oepvl_xor_key);
+                emitter.mov(scratch.tmp, oep);
+                emitter.add(scratch.tmp, scratch.idx);
+                emitter.add(scratch.base, scratch.tmp);
+                emitter.call(scratch.base);
+            }
+            break;
 
-			// store eax to zero for future xor key
-			m_assembler->xor_(regs.temp1, regs.temp1);
+        default:
+            break;
+        }
 
-			oep -= idx_oep;
-			m_assembler->mov(regs.temp2, regs.stack_ptr);
-			m_assembler->mov(regs.temp1, oep);
-			m_assembler->add(regs.temp1, idx_oep);
-			m_assembler->mov(regs.stack_ptr, regs.temp2);
-			//m_assembler->db(0xCC); 
+        if (obf_anti_disasm) {
+            adasm_obj.jmp_label_skip();
+        }
+        if (obf_fake_instr) {
+            const int fake_count = random_in_profile_range(
+                static_cast<int>(m_profile.fake_instr_min),
+                static_cast<int>(m_profile.fake_instr_max)
+            );
+            for (int i = 0; i < fake_count; ++i) {
+                emitter.db(static_cast<std::uint8_t>(random_value(0x10, 0xFF)));
+            }
+        }
+    } else {
+        emitter.call_rva(m_peView.entry_point_rva);
 
-			m_assembler->jmp(regs.temp1);
+        if (obf_fake_instr) {
+            const int fake_count = random_in_profile_range(
+                static_cast<int>(m_profile.fake_instr_min),
+                static_cast<int>(m_profile.fake_instr_max)
+            );
+            for (int i = 0; i < fake_count; ++i) {
+                emitter.db(static_cast<std::uint8_t>(random_value(0x10, 0xFF)));
+            }
+        }
+    }
 
-			if (obf_anti_disasm)
-				adasm_obj.jmp_label_skip();
+    const std::vector<std::string> section_to_xor = { ".reloc" };
+    for (const std::string& section_name : section_to_xor) {
+        xor_sections(section_name);
+    }
 
-			if (obf_fake_instr) {
-				for (int i = 0; i < random_value(0x1, 0x400); ++i) {
-					m_assembler->db(random_value(0x10, 0xFF));
-				}
-			}
-			break;
-		case 1:
+    pe_raw::PackOptions pack_options{};
+    if (obf_call_oep) {
+        pack_options.guard_cf_oep_rva = original_oep_rva;
+    }
 
-			/*
-			* calculate new oep address given the original offset value
-			* xor original offset value with random xor key
-			*/
+    const pe_raw::PackResult packed = pe_raw::packer_stub(
+        m_peView,
+        ".ptext",
+        emitter.bytes(),
+        static_cast<std::uint32_t>(ep_offset),
+        pack_options
+    );
 
-			// store eax to zero for future xor key
-			m_assembler->xor_(regs.temp1, regs.temp1);
+    print_info(
+        "Address of entry point 0x%llx\n",
+        static_cast<unsigned long long>(packed.entry_point_va)
+    );
+    print_info(
+        "New section characteristics 0x%x\n",
+        IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE
+    );
 
-			oep -= idx_oep;
-			idx_oep ^= oepvl_xor_key;
-
-			// store stack pointer value
-			m_assembler->mov(regs.temp2, regs.stack_ptr);
-
-			// store oep value into stack pointer
-			m_assembler->mov(regs.stack_ptr, oep);
-
-			// move xored value to temp1
-			m_assembler->mov(regs.temp1, idx_oep);
-
-			// dexor offset
-			m_assembler->xor_(regs.temp1, oepvl_xor_key);
-
-			// build oep address restore our stack and call it
-			m_assembler->add(regs.temp1, regs.stack_ptr);
-			m_assembler->mov(regs.stack_ptr, regs.temp2);
-
-			m_assembler->jmp(regs.temp1);
-
-			if (obf_fake_instr) {
-				for (int i = 0; i < random_value(0x1, 0x400); ++i) {
-					m_assembler->db(random_value(0x10, 0xFF));
-				}
-			}
-
-			if (obf_anti_disasm)
-				adasm_obj.jmp_label_skip();
-
-			break;
-		default:
-			break;
-		}
-	}
-	else {
-
-		m_assembler->call(oep);
-
-		if (obf_fake_instr) {
-			for (int i = 0; i < random_value(0x1, 0x400); ++i) {
-				m_assembler->db(random_value(0x10, 0xFF));
-			}
-		}
-	}
-
-	std::vector<std::string> section_to_xor = {
-		".reloc"
-	};
-
-	for (unsigned int i = 0; i < section_to_xor.size(); i++)
-	{
-		xor_sections(section_to_xor[i]);
-	}
-
-	print_info("Address of entry point 0x%llx\n", (unsigned long long)(pe_section.get_virtual_address() + image_base + ep_addr)); 
-	print_info("New section characteristics 0x%x\n", pe_section.get_characteristics());
-
-	pe_section.set_raw_data(
-		std::string(reinterpret_cast<char*>(m_assembler->bufferData()), m_assembler->offset())
-	);
-
-	pe_section.get_raw_data().resize(m_assembler->bufferCapacity());
-	pe_section.set_virtual_size((uint32_t)m_assembler->offset());
-
-	m_peImage->set_ep(pe_section.get_virtual_address() + (uint32_t)ep_addr);
-	pe_bliss::import_rebuilder_settings settings(true, false);
-
-	std::ofstream patch_file(m_output, std::ios::out | std::ios::binary | std::ios::trunc);
-	pe_bliss::rebuild_pe(*m_peImage, patch_file);
-	patch_file.close();
-
-	print_info("File successfully packed and saved in %s", m_output.c_str());
-
-	return;
+    pe_raw::write_file_bytes(m_output, m_peView.bytes);
+    print_info("File successfully packed and saved in %s", m_output.c_str());
 }
 
 void c_core::simple_jump_obfuscation()
 {
-	int jmp_labes = (rand() % 10);
-	for (int i = 0; i < jmp_labes; i++)
-	{
-		int first_value = random_value(0x10, 0x100);
-		int second_value = random_value(0x10, 0x100);
-		int third_value = 0;
+    auto& emitter = get_emitter();
 
-		if (first_value < second_value)
-		{
-			third_value = second_value - first_value;
-		} 
-		else if (first_value > second_value)
-		{
-			third_value = first_value - second_value;
-		}
+    const int first_value = random_value(0x10, 0x100);
+    const int second_value = random_value(0x10, 0x100);
+    int third_value = 0;
 
-		Label label = m_assembler->newLabel();
-		auto rand_reg = get_rand_reg();
-		arch_utils::arch_regs regs = get_arch_regs();
-		
-		m_assembler->xor_(rand_reg, random_value(0x10, 0x100));
-		m_assembler->mov(regs.temp1, first_value);
-		m_assembler->mov(regs.counter, second_value);
-		m_assembler->add(regs.temp1, third_value);
-		
-		m_assembler->cmp(regs.temp1, regs.counter);
-		switch (rand() % 4)
-		{
-		case 0:
-			m_assembler->jz(label);
-			break;
-		case 1:
-			m_assembler->jnz(label);
-			break;
-		case 2:
-			if (is_x86()) {
-				m_assembler->jecxz(label);
-			} else {
-				m_assembler->jz(label);
-			}
-			break;
-		case 3:
-			m_assembler->jg(label);
-			break;
-		}
-		int junk_bytes = rand() % 100;
-		for (int j = 0; j < junk_bytes; j++)
-			generate_junk_code();
-		m_assembler->bind(label);
-		generate_junk_code();
-	}
+    if (first_value < second_value) {
+        third_value = second_value - first_value;
+    }
+    else if (first_value > second_value) {
+        third_value = first_value - second_value;
+    }
+
+    const stub_emit::Label label = emitter.new_label();
+    const stub_emit::Reg rand_reg = get_rand_reg();
+    const arch_utils::arch_regs regs = get_arch_regs();
+
+    emitter.xor_(rand_reg, static_cast<std::uint32_t>(random_value(0x10, 0x100)));
+    emitter.mov(regs.temp1, static_cast<std::uint32_t>(first_value));
+    emitter.mov(regs.counter, static_cast<std::uint32_t>(second_value));
+    emitter.add(regs.temp1, static_cast<std::uint32_t>(third_value));
+    emitter.cmp(regs.temp1, regs.counter);
+
+    switch (rand() % 4) {
+    case 0: emitter.jz(label); break;
+    case 1: emitter.jnz(label); break;
+    case 2:
+        if (is_x86()) {
+            emitter.jecxz(label);
+        }
+        else {
+            emitter.jz(label);
+        }
+        break;
+    case 3: emitter.jg(label); break;
+    default: break;
+    }
+
+    const int junk_bytes = random_in_profile_range(
+        static_cast<int>(m_profile.jump_junk_min),
+        static_cast<int>(m_profile.jump_junk_max)
+    );
+    for (int j = 0; j < junk_bytes; ++j) {
+        generate_junk_code();
+    }
+
+    emitter.bind(label);
+    generate_junk_code();
 }
 
 void c_core::call_obfuscation()
 {
-	arch_utils::arch_regs regs = get_arch_regs();
-	int call_deep = (rand() % 10) + 1;
-	for (int i = 0; i < call_deep; i++)
-	{
-		Label call_label = m_assembler->newLabel();
+    auto& emitter = get_emitter();
+    const arch_utils::arch_regs regs = get_arch_regs();
 
-		m_assembler->push(regs.base_ptr);
-		m_assembler->mov(regs.base_ptr, regs.stack_ptr);
+    if (m_profile.call_depth == 0) {
+        generate_junk_code();
+        return;
+    }
 
-		generate_junk_code();
-		m_assembler->call(call_label);
-		generate_junk_code();
-		m_assembler->bind(call_label);
-		
-	}
+    const stub_emit::Label call_label = emitter.new_label();
+    emitter.push(regs.base_ptr);
+    emitter.mov(regs.base_ptr, regs.stack_ptr);
+
+    for (std::uint32_t i = 0; i < m_profile.call_depth; ++i) {
+        generate_junk_code();
+    }
+
+    emitter.call(call_label);
+
+    for (std::uint32_t i = 0; i < m_profile.call_depth; ++i) {
+        generate_junk_code();
+    }
+
+    emitter.bind(call_label);
 }
 
 void c_core::generate_junk_code()
 {
-	int junk_type = 2;
-	switch (junk_type)
-	{
-	case 0:
-		push_pop_junk();
-		break;
-	case 1:
-		big_conditions_junk();
-		break;
-	default:
-		break;
-	}
+    switch (rand() % 3) {
+    case 0: push_pop_junk(); break;
+    case 1: big_conditions_junk(); break;
+    default: get_emitter().nop(); break;
+    }
 }
 
 void c_core::push_pop_junk()
 {
-	int push_pop_count = (rand() % 10) * m_mutations;
-	for (int i = 0; i < push_pop_count; i++)
-	{
-		Operand src;
+    auto& emitter = get_emitter();
 
-		if (rand() % 2) {
-			src = get_rand_reg(); // x86::gp type
-		}
-		else {
-			src = Imm(rand() % 100); // imm type
-		}
+    const bool use_reg = rand() % 2;
+    const stub_emit::Reg dst = get_rand_reg();
 
-		m_assembler->push(get_rand_reg());
-		switch (rand() % 3)
-		{
-		case 0:
-			if (src.isReg()) {
-				m_assembler->add(get_rand_reg(), src.as<x86::Gp>());
-			}
-			else if (src.isImm()) {
-				m_assembler->add(get_rand_reg(), src.as<Imm>());
-			}
-			break;
-		case 1:
-			if (src.isReg()) {
-				m_assembler->imul(get_rand_reg(), src.as<x86::Gp>());
-			}
-			else if (src.isImm()) {
-				m_assembler->imul(get_rand_reg(), src.as<Imm>());
-			}
-			break;
-		case 2:
-			if (src.isReg()) {
-				m_assembler->sub(get_rand_reg(), src.as<x86::Gp>());
-			}
-			else if (src.isImm()) {
-				m_assembler->sub(get_rand_reg(), src.as<Imm>());
-			}
-			break;
-		default:
-			m_assembler->nop();
-		}
-		m_assembler->pop(get_rand_reg());
+    emitter.push(get_rand_reg());
 
-		int junk_subnodes_count = rand() % 100;
-		for (int n = 0; n < junk_subnodes_count; n++)
-		{
-			int rn = rand() % 3;
-			switch (rn)
-			{
+    if (use_reg) {
+        const stub_emit::Reg src = get_rand_reg();
+        switch (rand() % 3) {
+        case 0: emitter.add(dst, src); break;
+        case 1: emitter.imul(dst, rand() % 100); break;
+        case 2: emitter.sub(dst, src); break;
+        default: emitter.nop(); break;
+        }
+    }
+    else {
+        switch (rand() % 3) {
+        case 0: emitter.add(dst, static_cast<std::uint32_t>(rand() % 100)); break;
+        case 1: emitter.imul(dst, rand() % 100); break;
+        case 2: emitter.sub(dst, static_cast<std::uint32_t>(rand() % 100)); break;
+        default: emitter.nop(); break;
+        }
+    }
 
-			case 0:
-				m_assembler->imul(get_rand_reg(), rand() % 100);
-				m_assembler->imul(get_rand_reg(), rand() % 100);
-				m_assembler->add(get_rand_reg(), rand() % 100);
-				m_assembler->cpuid();
-				m_assembler->nop();
-				m_assembler->cpuid();
-				m_assembler->push(get_rand_reg());
-				m_assembler->pop(get_rand_reg());
-				break;
+    emitter.pop(get_rand_reg());
 
-			case 1:
-				m_assembler->imul(get_rand_reg(), rand() % 100);
-				m_assembler->add(get_rand_reg(), rand() % 100);
-				m_assembler->push(get_rand_reg());
-				m_assembler->add(get_rand_reg(), rand() % 100);
-				m_assembler->cpuid();
-				m_assembler->nop();
-				m_assembler->nop();
-				m_assembler->pop(get_rand_reg());
+    for (std::uint32_t round = 0; round < m_profile.push_pop_rounds; ++round) {
+    switch (rand() % 3) {
+    case 0:
+        emitter.imul(get_rand_reg(), rand() % 100);
+        emitter.imul(get_rand_reg(), rand() % 100);
+        emitter.add(get_rand_reg(), static_cast<std::uint32_t>(rand() % 100));
+        emitter.cpuid();
+        emitter.nop();
+        emitter.cpuid();
+        emitter.push(get_rand_reg());
+        emitter.pop(get_rand_reg());
+        break;
+    case 1:
+        emitter.imul(get_rand_reg(), rand() % 100);
+        emitter.add(get_rand_reg(), static_cast<std::uint32_t>(rand() % 100));
+        emitter.push(get_rand_reg());
+        emitter.add(get_rand_reg(), static_cast<std::uint32_t>(rand() % 100));
+        emitter.cpuid();
+        emitter.nop();
+        emitter.nop();
+        emitter.pop(get_rand_reg());
+        break;
+    case 2:
+        emitter.sub(get_rand_reg(), static_cast<std::uint32_t>(rand() % 100));
+        emitter.add(get_rand_reg(), static_cast<std::uint32_t>(rand() % 100));
+        emitter.add(get_rand_reg(), static_cast<std::uint32_t>(rand() % 100));
+        emitter.push(get_rand_reg());
+        emitter.nop();
+        emitter.nop();
+        emitter.cpuid();
+        emitter.pop(get_rand_reg());
+        break;
+    default:
+        emitter.nop();
+        break;
 
-				break;
+    }
+    }
 
-			case 2:
-				m_assembler->sub(get_rand_reg(), rand() % 100);
-				m_assembler->add(get_rand_reg(), rand() % 100);
-				m_assembler->add(get_rand_reg(), rand() % 100);
-				m_assembler->push(get_rand_reg());
-				m_assembler->nop();
-				m_assembler->nop();
-				m_assembler->cpuid();
-				m_assembler->pop(get_rand_reg());
-				break;
-
-			default:
-				m_assembler->nop();
-			}
-		}
-	}
 }
 
 void c_core::big_conditions_junk()
 {
-	int cond_count = (rand() % 100) + 1;
-	for (int i = 0; i < cond_count; i++)
-	{
-		auto reg1 = get_rand_reg();
-		auto reg2 = get_rand_reg();
-		int actions_count = rand() % 100;
-		for (int j = 0; j < actions_count; j++)
-		{
-			switch (rand() % 5)
-			{
-			case 0:
-				m_assembler->xor_(reg1, reg2);
-				break;
-			case 1:
-				m_assembler->add(reg1, rand() % 10);
-				break;
-			case 2:
-				m_assembler->imul(reg2, rand() % 100);
-				break;
-			case 3:
-				m_assembler->sub(reg1, rand() % 100);
-				break;
-			case 4:
-				m_assembler->mov(reg1, reg2);
-				break;
-			default:
-				break;
-			}
-		}
-		m_assembler->cmp(reg1, reg2);
-		Label cmp_label = m_assembler->newLabel();
-		switch (rand() % 7)
-		{
-		case 0:
-			m_assembler->jmp(cmp_label);
-			break;
-		case 1:
-			m_assembler->jz(cmp_label);
-			break;
-		case 2:
-			m_assembler->jnz(cmp_label);
-			break;
-		case 3:
-			m_assembler->jb(cmp_label);
-			break;
-		case 4:
-			m_assembler->jbe(cmp_label);
-			break;
-		case 5:
-			m_assembler->jl(cmp_label);
-			break;
-		case 6:
-			m_assembler->jle(cmp_label);
-			break;
-		default:
-			m_assembler->jmp(cmp_label);
-			break;
-		}
-		m_assembler->bind(cmp_label);
-		push_pop_junk();
+    auto& emitter = get_emitter();
 
-	}
+    const stub_emit::Reg reg1 = get_rand_reg();
+    const stub_emit::Reg reg2 = get_rand_reg();
+    const int actions_count = random_in_profile_range(
+        static_cast<int>(m_profile.condition_actions_min),
+        static_cast<int>(m_profile.condition_actions_max)
+    );
+
+    for (int j = 0; j < actions_count; ++j) {
+        switch (rand() % 5) {
+        case 0: emitter.xor_(reg1, reg2); break;
+        case 1: emitter.add(reg1, static_cast<std::uint32_t>(rand() % 10)); break;
+        case 2: emitter.imul(reg2, rand() % 100); break;
+        case 3: emitter.sub(reg1, static_cast<std::uint32_t>(rand() % 100)); break;
+        case 4: emitter.mov(reg1, reg2); break;
+        default: break;
+        }
+    }
+
+    emitter.cmp(reg1, reg2);
+    const stub_emit::Label cmp_label = emitter.new_label();
+    switch (rand() % 7) {
+    case 0: emitter.jmp(cmp_label); break;
+    case 1: emitter.jz(cmp_label); break;
+    case 2: emitter.jnz(cmp_label); break;
+    case 3: emitter.jb(cmp_label); break;
+    case 4: emitter.jbe(cmp_label); break;
+    case 5: emitter.jl(cmp_label); break;
+    case 6: emitter.jle(cmp_label); break;
+    default: emitter.jmp(cmp_label); break;
+    }
+
+    emitter.bind(cmp_label);
+    push_pop_junk();
+
 }
 
-x86::Gp c_core::get_rand_reg()
+stub_emit::Reg c_core::get_rand_reg()
 {
-	return arch_utils::get_random_gp_reg(m_assembler.get(), is_x64());
+    return arch_utils::get_random_gp_reg(is_x64());
 }
 
-x86::Gp c_core::get_rand_lower_reg() {
-	return arch_utils::get_random_lower_reg(is_x64());
+stub_emit::Reg c_core::get_rand_lower_reg()
+{
+    return arch_utils::get_random_lower_reg(is_x64());
+}
+
+int c_core::random_in_profile_range(int min_value, int max_value) const
+{
+    if (min_value >= max_value) {
+        return min_value;
+    }
+    return random_value(min_value, max_value);
 }
 
 void c_core::obfuscation_process()
 {
-	c_mba mba_obj(*this);
-	c_mba::options mba_opt;
+    c_mba mba_obj(*this);
+    c_adasm adasm_obj(*this);
 
-	c_adasm adasm_obj(*this);
-	for (uint32_t i = 0; i < m_mutations; i++)
-	{
-		if (obf_anti_disasm) {
-			adasm_obj.jmp_label_skip();
-		}
+    print_info(
+        "Advanced values: %u passes, MBA weight %u%%, call depth %u\n",
+        m_profile.level,
+        m_profile.obfuscation_passes,
+        m_profile.mba_weight_percent,
+        m_profile.call_depth
+    );
 
-		int junk_step = obf_mba ? rand() % 3 : rand() % 2;
-		switch (junk_step)
-		{
-		case 0:
-			simple_jump_obfuscation();
-			break;
-		case 1:
-			call_obfuscation();
-			break;
+    for (std::uint32_t i = 0; i < m_profile.obfuscation_passes; ++i) {
+        if (obf_anti_disasm) {
+            adasm_obj.jmp_label_skip();
+        }
 
-		case 2:
-			mba_obj.mba_code(mba_opt);
-			break;
-		default:
-			break;
-		}
-	}
+        const int roll = rand() % 100;
+        if (obf_mba && static_cast<std::uint32_t>(roll) < m_profile.mba_weight_percent) {
+            c_mba::options mba_opt{};
+            mba_opt.mba_factor = static_cast<int>(m_profile.mba_inner_ops);
+            mba_obj.mba_code(mba_opt);
+        }
+        else {
+            switch (rand() % 2) {
+            case 0: simple_jump_obfuscation(); break;
+            case 1: call_obfuscation(); break;
+            default: break;
+            }
+        }
+    }
 }

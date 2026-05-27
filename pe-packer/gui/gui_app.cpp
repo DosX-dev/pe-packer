@@ -25,11 +25,11 @@
 #include <cwctype>
 
 #include "../core/core.hpp"
+#include "../core/mutation_profile.hpp"
 #include "../handler/handler.hpp"
 #include "../utils/arguments.hpp"
 #include "../utils/utils.hpp"
-#include "../pe_lib/pe_bliss.h"
-#include "../pe_lib/pe_factory.h"
+#include "../pe_raw/pe_view.hpp"
 
 #include "../../vendor/imgui/imgui.h"
 #include "../../vendor/imgui/backends/imgui_impl_dx11.h"
@@ -79,8 +79,6 @@ struct GuiState {
     int logAnimationGeneration = 0;
     bool inputShowFullPath = false;
     bool outputShowFullPath = false;
-    bool showOepAslrWarning = false;
-    bool ignoreOepAslrWarning = false;
     std::vector<std::pair<std::string, bool>> logEntries;
     FileInfo fileInfo;
 };
@@ -303,9 +301,11 @@ bool ExecutePacking(GuiState& state, std::string& statusMessage) {
     arguments::init(static_cast<int>(argv.size()), argv.data());
 
     try {
-        const auto mutations = static_cast<uint32_t>(state.mutationBase * 10);
-        print_info("Mutations count: %u\n", mutations);
-        auto packer = std::make_unique<c_core>(inputPath, outputPath, mutations);
+        const auto obfuscation_level = mutation_profile::level_from_slider(
+            static_cast<uint32_t>(state.mutationBase)
+        );
+        print_info("Complexity percentage level is: %u\n", obfuscation_level, state.mutationBase);
+        auto packer = std::make_unique<c_core>(inputPath, outputPath, obfuscation_level);
         packer->process();
         
         if (state.logEntries.size() > 100) {
@@ -846,7 +846,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             ImGui::Spacing();
             ImGui::Indent(4.0f);
             
-            AnimatedIntSlider("Mutation Cycles", &state.mutationBase, 1, 100);
+            AnimatedIntSlider("Complexity percentage", &state.mutationBase, 1, 100);
             //ImGui::SameLine();
             //ImGui::TextDisabled("Mutations count");
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 4.f));
@@ -859,13 +859,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                 AnimatedCheckbox("Remove ASLR", &state.removeAslr);
 
                 ImGui::TableNextColumn();
-                bool oepChanged = AnimatedCheckbox("OEP call obfuscation", &state.obfuscateOep);
-                if (oepChanged && state.obfuscateOep &&
-                    state.fileInfo.isValid && state.fileInfo.aslrEnabled &&
-                    !state.removeAslr) {
-                    state.showOepAslrWarning = true;
-                    state.ignoreOepAslrWarning = false;
-                }
+                AnimatedCheckbox("OEP call obfuscation", &state.obfuscateOep);
                 checkbox("Anti-disassembly", &state.antiDisasm);
                 checkbox("Mixed Boolean Arithmetic", &state.mba);
                 checkbox("Encrypt sections", &state.encryptSections);
@@ -894,19 +888,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
 
         ImGui::SameLine();
 
-        const bool needsOepAslrWarning =
-            state.showOepAslrWarning &&
-            state.obfuscateOep &&
-            state.fileInfo.isValid &&
-            state.fileInfo.aslrEnabled &&
-            !state.removeAslr &&
-            !state.ignoreOepAslrWarning;
-
-        const ImGuiWindowFlags fileInfoFlags = needsOepAslrWarning
-            ? (ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)
-            : 0;
-
-        if (ImGui::BeginChild("FileInfoColumn", ImVec2(rightColumnWidth, middleSectionHeight), false, fileInfoFlags)) {
+        if (ImGui::BeginChild("FileInfoColumn", ImVec2(rightColumnWidth, middleSectionHeight), false, 0)) {
             // rounded border
             const float panelRounding = 16.0f;
             const ImVec4 borderCol = ImVec4(0.29f, 0.47f, 0.83f, 0.32f);
@@ -940,10 +922,6 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                 fileInfoTitle);
             ImGui::Dummy(ImVec2(0.0f, titleSize.y));
             ImGui::PopStyleColor();
-
-            if (needsOepAslrWarning) {
-                ImGui::BeginDisabled(true);
-            }
 
             if (state.fileInfo.isValid) {
                 
@@ -1032,7 +1010,6 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
            
 			ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 6.0f);
             
-            ImGui::BeginDisabled(needsOepAslrWarning);
             if (GradientButton(
                     "Pack",
                     ImVec2(buttonWidth, 0.0f),
@@ -1042,121 +1019,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                     ImVec4(0.32f, 0.56f, 0.96f, 1.0f))) {
                 lastSuccess = ExecutePacking(state, statusMessage);
             }
-            ImGui::EndDisabled();
 
-			// custom warning overlay for OEP obfuscation when ASLR is enabled
-            if (needsOepAslrWarning) {
-                ImGui::EndDisabled();
-
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                dl->AddRectFilled(colMin, colMax, ImGui::GetColorU32(ImVec4(0.04f, 0.05f, 0.07f, 0.55f)), panelRounding);
-
-                const ImVec2 colSize(colMax.x - colMin.x, colMax.y - colMin.y);
-                float cardW = colSize.x - 36.0f;
-                if (cardW > 520.0f) cardW = 520.0f;
-                if (cardW < 280.0f) cardW = colSize.x - 16.0f;
-                const char* warnTitle = "Warning";
-                const char* warnMsg = "ASLR is enabled in the binary. Enable\n\"Remove ASLR\" for OEP call obfuscation";
-
-                const float padX = 16.0f;
-                const float padTop = 14.0f;
-                const float padBottom = 14.0f;
-                const float gapTitleMsg = 8.0f;
-                const float gapMsgBtns = 10.0f;
-                const float btnGap = 10.0f;
-
-                const float wrapW = (std::max)(0.0f, cardW - padX * 2.0f);
-                const ImVec2 titleSz = ImGui::CalcTextSize(warnTitle);
-                const ImVec2 msgSz = ImGui::CalcTextSize(warnMsg, nullptr, false, wrapW);
-
-                const float btnH = ImGui::GetFrameHeight();
-                const float btnMinW = 170.0f;
-                const bool stackButtons = (wrapW < (btnMinW * 2.0f + btnGap));
-                const float buttonsBlockH = stackButtons ? (btnH * 2.0f + btnGap) : btnH;
-
-                float cardH = padTop + titleSz.y + gapTitleMsg + msgSz.y + gapMsgBtns + buttonsBlockH + padBottom;
-                const float maxCardH = colSize.y - 24.0f;
-                if (cardH > maxCardH) cardH = maxCardH;
-
-                const ImVec2 cardMin(colMin.x + (colSize.x - cardW) * 0.5f, colMin.y + (colSize.y - cardH) * 0.5f);
-                const ImVec2 cardMax(cardMin.x + cardW, cardMin.y + cardH);
-
-                dl->AddRectFilled(cardMin, cardMax, ImGui::GetColorU32(ImVec4(0.18f, 0.16f, 0.10f, 0.98f)), 12.0f);
-                dl->AddRect(cardMin, cardMax, ImGui::GetColorU32(ImVec4(0.98f, 0.88f, 0.55f, 0.65f)), 12.0f, 0, 1.2f);
-
-                const ImVec2 savedCursor = ImGui::GetCursorScreenPos();
-                ImGui::PushClipRect(cardMin, cardMax, true);
-
-                const float contentLeft = cardMin.x + padX;
-                const float contentRight = cardMax.x - padX;
-                const float contentW = (std::max)(0.0f, contentRight - contentLeft);
-                float y = cardMin.y + padTop;
-
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.88f, 0.55f, 1.0f));
-                {
-                    const float titleX = cardMin.x + (cardW - titleSz.x) * 0.5f;
-                    ImGui::SetCursorScreenPos(ImVec2(titleX, y));
-                    ImGui::TextUnformatted(warnTitle);
-                    y += titleSz.y;
-                }
-                ImGui::PopStyleColor();
-
-                y += gapTitleMsg;
-                ImGui::SetCursorScreenPos(ImVec2(contentLeft, y));
-                ImGui::PushTextWrapPos(contentLeft + contentW);
-                ImGui::TextWrapped("%s", warnMsg);
-                ImGui::PopTextWrapPos();
-                y += msgSz.y;
-
-                y += gapMsgBtns;
-
-                if (stackButtons) {
-                    const float fullW = contentW;
-                    ImGui::SetCursorScreenPos(ImVec2(contentLeft, y));
-                    if (ImGui::Button("Enable Remove ASLR", ImVec2(fullW, 0.0f))) {
-                        state.removeAslr = true;
-                        state.showOepAslrWarning = false;
-                    }
-                    y += ImGui::GetItemRectSize().y + btnGap;
-                    ImGui::SetCursorScreenPos(ImVec2(contentLeft, y));
-                    if (ImGui::Button("Ignore warning", ImVec2(fullW, 0.0f))) {
-                        state.ignoreOepAslrWarning = true;
-                        state.showOepAslrWarning = false;
-                    }
-                } else {
-                    const float bW = (contentW - btnGap) * 0.5f;
-                    if (bW > 10.0f) {
-                        ImGui::SetCursorScreenPos(ImVec2(contentLeft, y));
-                        if (ImGui::Button("Enable Remove ASLR", ImVec2(bW, 0.0f))) {
-                            state.removeAslr = true;
-                            state.showOepAslrWarning = false;
-                        }
-                        ImGui::SameLine(0.0f, btnGap);
-                        if (ImGui::Button("Ignore warning", ImVec2(bW, 0.0f))) {
-                            state.ignoreOepAslrWarning = true;
-                            state.showOepAslrWarning = false;
-                        }
-                    } else {
-                        const float fullW = contentW;
-                        ImGui::SetCursorScreenPos(ImVec2(contentLeft, y));
-                        if (ImGui::Button("Enable Remove ASLR", ImVec2(fullW, 0.0f))) {
-                            state.removeAslr = true;
-                            state.showOepAslrWarning = false;
-                        }
-                        y += ImGui::GetItemRectSize().y + btnGap;
-                        ImGui::SetCursorScreenPos(ImVec2(contentLeft, y));
-                        if (ImGui::Button("Ignore warning", ImVec2(fullW, 0.0f))) {
-                            state.ignoreOepAslrWarning = true;
-                            state.showOepAslrWarning = false;
-                        }
-                    }
-                }
-
-                // restore cursor
-                ImGui::PopClipRect();
-                ImGui::SetCursorScreenPos(savedCursor);
-                ImGui::Dummy(ImVec2(0.0f, 0.0f));
-            }
         }
         ImGui::EndChild();
 
@@ -1492,7 +1355,7 @@ static std::string ShortenPathForDisplayIfInCurrentDir(const std::string& value)
     if (!p.has_filename()) {
         return value;
     }
-    // before focus, show only filename (no full path)
+    // before focus, show only filename
     return p.filename().string();
 }
 
@@ -1526,69 +1389,49 @@ static void ExtractFileInfo(GuiState& state) {
     state.fileInfo.sectionCount.clear();
     state.fileInfo.filePath.clear();
     state.fileInfo.aslrEnabled = false;
-    state.showOepAslrWarning = false;
-    state.ignoreOepAslrWarning = false;
 
     std::string inputPath(state.input.data());
     if (inputPath.empty()) {
         return;
     }
 
+    const pe_raw::ParseFileResult parsed = pe_raw::parse_pe_file(inputPath);
+    if (!parsed.ok()) {
+        state.fileInfo.isValid = false;
+        return;
+    }
+
     try {
-        std::ifstream pe_file(inputPath, std::ios::in | std::ios::binary);
-        if (!pe_file) {
-            return;
+        const pe_raw::PeView& view = *parsed.view;
+
+        state.fileInfo.architecture = view.is64 ? "x64" : "x86";
+
+        {
+            std::ostringstream epStream;
+            epStream << "0x" << std::hex << std::uppercase << view.entry_point_rva;
+            state.fileInfo.entryPoint = epStream.str();
         }
 
-        auto peImage = std::make_unique<pe_bliss::pe_base>(pe_bliss::pe_factory::create_pe(pe_file));
-        pe_bliss::pe_type peType = peImage->get_pe_type();
-        
-        if (peType != pe_bliss::pe_type_32 && peType != pe_bliss::pe_type_64) {
-            return;
+        {
+            std::ostringstream baseStream;
+            baseStream << "0x" << std::hex << std::uppercase << view.image_base;
+            state.fileInfo.imageBase = baseStream.str();
         }
 
-        // architecture
-        if (peType == pe_bliss::pe_type_64) {
-            state.fileInfo.architecture = "x64";
-        } else {
-            state.fileInfo.architecture = "x86";
+        {
+            std::ostringstream sizeStream;
+            sizeStream << "0x" << std::hex << std::uppercase << view.size_of_image
+                       << " (" << std::dec << view.size_of_image << " bytes)";
+            state.fileInfo.imageSize = sizeStream.str();
         }
 
-        // entry point
-        uint32_t ep = peImage->get_ep();
-        std::ostringstream epStream;
-        epStream << "0x" << std::hex << std::uppercase << ep;
-        state.fileInfo.entryPoint = epStream.str();
+        state.fileInfo.sectionCount = std::to_string(view.num_sections);
 
-        // image base
-        std::ostringstream baseStream;
-        if (peType == pe_bliss::pe_type_64) {
-            uint64_t base = peImage->get_image_base_64();
-            baseStream << "0x" << std::hex << std::uppercase << base;
-        } else {
-            uint32_t base = peImage->get_image_base_32();
-            baseStream << "0x" << std::hex << std::uppercase << base;
-        }
-        state.fileInfo.imageBase = baseStream.str();
-
-        // image size
-        uint32_t imageSize = peImage->get_size_of_image();
-        std::ostringstream sizeStream;
-        sizeStream << "0x" << std::hex << std::uppercase << imageSize 
-                   << " (" << std::dec << imageSize << " bytes)";
-        state.fileInfo.imageSize = sizeStream.str();
-
-        // section count
-        uint16_t sectionCount = peImage->get_number_of_sections();
-        state.fileInfo.sectionCount = std::to_string(sectionCount);
-
-        // file path
         std::filesystem::path filePath(inputPath);
         state.fileInfo.filePath = filePath.filename().string();
 
-        // ASLR flag
-        uint16_t dllChar = peImage->get_dll_characteristics();
-        state.fileInfo.aslrEnabled = (dllChar & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) != 0;
+        state.fileInfo.aslrEnabled =
+            (view.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) != 0;
 
         state.fileInfo.isValid = true;
     }
