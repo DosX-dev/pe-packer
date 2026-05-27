@@ -1,4 +1,6 @@
-# PE packer for x86/x64
+<div align="center">
+<img width="1408" height="768" alt="image" src="https://github.com/user-attachments/assets/47d455ec-6cdf-4576-b255-2f350e6fb7dc" />
+</div>
 
 ## What is this?
 `pe-packer` takes a Windows Portable Executable (PE) file, makes a new executable section with a runtime stub, and applies a set of optional obfuscation/encryption techniques.
@@ -46,6 +48,9 @@ pe-packer.exe input.exe output.exe 4 -fpack 0x401040 0x401072
 | `-finstr`   | Emit random bytes (“fake instructions”) to harm linear sweep / analysis heuristics.   |                 |
 | `-noaslr`   | Clear the `DYNAMIC_BASE` flag (disable ASLR) in the output image.                      |                 |
 
+> [!NOTE]
+> `-fpack` takes two additional arguments: start and end address of the function range.
+
 ## GUI Interface
 <img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/b73db14d-1022-4492-8613-886437d594d9" />
 
@@ -65,10 +70,6 @@ The GUI slider is `1..100` and is mapped to **level 1..10**:
 
 ## Output
 <img width="655" height="390" alt="image" src="https://github.com/user-attachments/assets/7ca56910-4837-4cf2-a8ca-1a7bd0432f8a" />
-
-
-> [!NOTE]
-> `-fpack` takes two additional arguments: start and end address of the function range (VA as seen in a debugger).
 
 ## CFG / ASLR notes
 
