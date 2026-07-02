@@ -23,6 +23,7 @@
 #include <cstring>
 #include <fstream>
 #include <cwctype>
+#include <cfloat>
 
 #include "../core/core.hpp"
 #include "../core/mutation_profile.hpp"
@@ -47,6 +48,61 @@ LogCallback g_logCallback = nullptr;
 
 static constexpr int kGuiWidth = 800;
 static constexpr int kGuiHeight = 600;
+static constexpr float kUIFontSize = 17.0f;
+static constexpr float kLogsHeight = 196.0f;
+
+// interactive elements only
+static const ImVec4 kClrAccent(0.52f, 0.86f, 0.68f, 1.0f);
+static const ImVec4 kClrAccentHover(0.58f, 0.92f, 0.74f, 1.0f);
+static const ImVec4 kClrAccentActive(0.36f, 0.66f, 0.52f, 1.0f);
+static const ImVec4 kClrAccentSoft(0.52f, 0.86f, 0.68f, 0.22f);
+static const ImVec4 kClrAccentGlow(0.52f, 0.86f, 0.68f, 0.12f);
+
+// backgrounds & surfaces
+static const ImVec4 kClrBg(0.09f, 0.10f, 0.11f, 1.0f);
+static const ImVec4 kClrPanel(0.13f, 0.14f, 0.16f, 1.0f);
+static const ImVec4 kClrSurface(0.17f, 0.18f, 0.21f, 1.0f);
+static const ImVec4 kClrSurfaceHi(0.21f, 0.23f, 0.26f, 1.0f);
+
+// text
+static const ImVec4 kClrText(0.90f, 0.91f, 0.93f, 1.0f);
+static const ImVec4 kClrTextTitle(0.94f, 0.96f, 0.95f, 1.0f);
+static const ImVec4 kClrTextDim(0.50f, 0.53f, 0.57f, 1.0f);
+
+// borders & dividers
+static const ImVec4 kClrBorder(0.30f, 0.32f, 0.36f, 0.42f);
+static const ImVec4 kClrBorderSubtle(0.22f, 0.24f, 0.27f, 0.55f);
+static const ImVec4 kClrSeparator(0.22f, 0.24f, 0.27f, 1.0f);
+
+// semantic
+static const ImVec4 kClrLogOk(0.52f, 0.86f, 0.68f, 1.0f);
+static const ImVec4 kClrLogErr(0.92f, 0.50f, 0.44f, 1.0f);
+
+// buttons
+static const ImVec4 kClrBtnNeutralLo(0.16f, 0.17f, 0.19f, 1.0f);
+static const ImVec4 kClrBtnNeutralHi(0.22f, 0.24f, 0.27f, 1.0f);
+static const ImVec4 kClrPackLo(0.24f, 0.42f, 0.34f, 1.0f);
+static const ImVec4 kClrPackHi(0.34f, 0.58f, 0.46f, 1.0f);
+static const ImVec4 kClrPackHoverLo(0.20f, 0.36f, 0.28f, 1.0f);
+static const ImVec4 kClrPackHoverHi(0.28f, 0.50f, 0.38f, 1.0f);
+
+// controls
+static const ImVec4 kClrCheckMark(0.96f, 0.97f, 0.98f, 1.0f);
+static const ImVec4 kClrSliderKnob(0.92f, 0.93f, 0.95f, 1.0f);
+static const ImVec4 kClrSliderKnobActive(0.98f, 0.98f, 1.0f, 1.0f);
+static const ImVec4 kClrScrollbarGrab(0.32f, 0.34f, 0.38f, 0.50f);
+static const ImVec4 kClrScrollbarGrabHovered(0.40f, 0.42f, 0.46f, 0.70f);
+static constexpr float kPanelPad = 10.0f;
+static constexpr float kPanelTitleGap = 4.0f;
+static constexpr float kBrowseBtnWidth = 96.0f;
+static constexpr float kPackBtnWidth = 112.0f;
+static constexpr float kBrowseGap = 8.0f;
+static constexpr float kFormLabelWidth = 78.0f;
+static constexpr float kFieldLabelWidth = 92.0f;
+static constexpr float kInfoLabelWidth = 88.0f;
+static constexpr float kOptionsColumnGap = 12.0f;
+static constexpr ImGuiWindowFlags kPanelChildFlags =
+    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
 struct FileInfo {
     std::string architecture;
@@ -118,13 +174,31 @@ static void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuc
 static bool BrowseInputFile(GuiState& state);
 static bool BrowseOutputFile(GuiState& state);
 static bool AnimatedCheckbox(const char* label, bool* value);
-static bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue);
-static bool GradientButton(const char* label, const ImVec2& size, ImVec4 baseL, ImVec4 baseR, ImVec4 hoverL, ImVec4 hoverR);
+static bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue, float width = 0.0f);
+static bool GradientButton(
+    const char* label,
+    const ImVec2& size,
+    ImVec4 baseL,
+    ImVec4 baseR,
+    ImVec4 hoverL,
+    ImVec4 hoverR,
+    float rounding_override = -1.0f,
+    bool uniform_fill = false,
+    bool accent_glow = true);
+static void DrawPanelBorder(ImDrawList* draw_list, const ImVec2& min, const ImVec2& max, float rounding);
+static void DrawPanelTitle(const char* title, const ImVec2& panel_min, float panel_width);
+static void BeginPanelContent();
+static float PanelContentWidth();
+static void AlignLabelLeft(const char* label);
+static void VCenterInRow(float row_h);
+static void RenderFileInfoList(const FileInfo& info, float content_w, float row_h);
+static std::string FitTextToWidth(const char* text, float max_width);
 static void SetDefaultOutputFromInput(GuiState& state);
 static void CopyStringToBuffer(const std::string& value, std::array<char, MAX_PATH>& buffer);
 static void CopyShortStringToBuffer(const std::string& value, std::array<char, MAX_PATH>& buffer);
 static void ApplyBorderlessWindow(HWND hwnd, int width, int height);
 static void ApplyCustomTheme(ImGuiStyle& style);
+static void LoadUiFonts(ImGuiIO& io);
 static void ExtractFileInfo(GuiState& state);
 
 int run_gui() {
@@ -176,6 +250,7 @@ int run_gui() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ApplyCustomTheme(ImGui::GetStyle());
+    LoadUiFonts(io);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -338,75 +413,191 @@ bool ExecutePacking(GuiState& state, std::string& statusMessage) {
 }
 
 bool AnimatedCheckbox(const char* label, bool* value) {
-    const ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x * 0.72f, style.FramePadding.y * 0.62f));
-    ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 0.0f));
-    const bool changed = ImGui::Checkbox(label, value);
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
+    ImGui::PushID(label);
 
-    ImGuiID itemId = ImGui::GetItemID();
-    if (itemId == 0) {
-        return changed;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float frame_h = ImGui::GetFrameHeight();
+    const float box_size = frame_h * 0.72f;
+    const ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
+    const float spacing = style.ItemInnerSpacing.x;
+    float total_w = box_size + (label_size.x > 0.0f ? spacing + label_size.x : 0.0f);
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    if (avail_w > total_w) {
+        total_w = avail_w;
+    }
+    const float total_h = frame_h;
+
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##toggle", ImVec2(total_w, total_h));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    const ImGuiID id = ImGui::GetItemID();
+
+    if (pressed) {
+        *value = !*value;
     }
 
     ImGuiStorage* storage = ImGui::GetStateStorage();
-    const ImGuiID animId = itemId ^ 0x51A7E9B1u;
+    const ImGuiID checkAnimId = id;
+    const ImGuiID hoverAnimId = id ^ 0x7F4A2B1Du;
+    const ImGuiID bounceAnimId = id ^ 0x3C8E5F90u;
+    const ImGuiID rippleAnimId = id ^ 0xA1B2C3D4u;
 
-    float progress = storage->GetFloat(animId, *value ? 1.0f : 0.0f);
-    const float target = *value ? 1.0f : 0.0f;
-    const float lerpFactor = (std::min)(1.0f, ImGui::GetIO().DeltaTime * 14.0f);
-    progress = progress + (target - progress) * lerpFactor;
-    storage->SetFloat(animId, progress);
+    float check_anim = storage->GetFloat(checkAnimId, *value ? 1.0f : 0.0f);
+    float hover_anim = storage->GetFloat(hoverAnimId, 0.0f);
+    float bounce = storage->GetFloat(bounceAnimId, 0.0f);
+    float ripple = storage->GetFloat(rippleAnimId, 0.0f);
 
-    if (progress <= 0.001f) {
-        return changed;
+    const float dt = ImGui::GetIO().DeltaTime;
+    const float check_target = *value ? 1.0f : 0.0f;
+    const float check_speed = pressed ? 22.0f : 14.0f;
+    check_anim += (check_target - check_anim) * (std::min)(1.0f, dt * check_speed);
+
+    const float hover_target = hovered ? 1.0f : 0.0f;
+    hover_anim += (hover_target - hover_anim) * (std::min)(1.0f, dt * 16.0f);
+
+    if (pressed) {
+        bounce = 1.0f;
+        ripple = 1.0f;
+    }
+    bounce = (std::max)(0.0f, bounce - dt * 4.8f);
+    ripple = (std::max)(0.0f, ripple - dt * 3.2f);
+
+    storage->SetFloat(checkAnimId, check_anim);
+    storage->SetFloat(hoverAnimId, hover_anim);
+    storage->SetFloat(bounceAnimId, bounce);
+    storage->SetFloat(rippleAnimId, ripple);
+
+    auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+    auto lerp = [&](float a, float b, float t) { return a + (b - a) * clamp01(t); };
+    auto lerp4 = [&](const ImVec4& a, const ImVec4& b, float t) {
+        t = clamp01(t);
+        return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+    };
+    auto ease_out_cubic = [&](float t) {
+        t = clamp01(t);
+        const float u = 1.0f - t;
+        return 1.0f - u * u * u;
+    };
+    auto ease_out_back = [&](float t) {
+        t = clamp01(t);
+        const float c1 = 1.70158f;
+        const float c3 = c1 + 1.0f;
+        return 1.0f + c3 * (t - 1.0f) * (t - 1.0f) * (t - 1.0f) + c1 * (t - 1.0f) * (t - 1.0f);
+    };
+
+    const float box_y = pos.y + (total_h - box_size) * 0.5f;
+    const ImVec2 box_min(pos.x, box_y);
+    const ImVec2 box_max(pos.x + box_size, box_y + box_size);
+    const ImVec2 box_center((box_min.x + box_max.x) * 0.5f, (box_min.y + box_max.y) * 0.5f);
+    const float rounding = box_size * 0.30f;
+
+    const float bounce_scale = 1.0f + bounce * 0.10f * std::sinf(bounce * 3.14159265f);
+    const float draw_size = box_size * bounce_scale;
+    const ImVec2 draw_min(box_center.x - draw_size * 0.5f, box_center.y - draw_size * 0.5f);
+    const ImVec2 draw_max(box_center.x + draw_size * 0.5f, box_center.y + draw_size * 0.5f);
+
+    const ImVec4 bg_off(kClrSurface.x, kClrSurface.y, kClrSurface.z, 1.0f);
+    const ImVec4 bg_on(kClrAccentActive.x, kClrAccentActive.y, kClrAccentActive.z, 1.0f);
+    const ImVec4 border_off(kClrTextDim.x, kClrTextDim.y, kClrTextDim.z, 0.55f + hover_anim * 0.25f);
+    const ImVec4 border_on(kClrAccentHover.x, kClrAccentHover.y, kClrAccentHover.z, 0.95f);
+    const float fill_t = ease_out_cubic(check_anim);
+    const ImVec4 bg = lerp4(bg_off, bg_on, fill_t);
+    const ImVec4 border = lerp4(border_off, border_on, check_anim);
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    if (hover_anim > 0.01f) {
+        const float glow_expand = 3.0f + hover_anim * 2.0f;
+        draw_list->AddRectFilled(
+            ImVec2(draw_min.x - glow_expand, draw_min.y - glow_expand),
+            ImVec2(draw_max.x + glow_expand, draw_max.y + glow_expand),
+            ImGui::GetColorU32(ImVec4(kClrAccent.x, kClrAccent.y, kClrAccent.z, 0.07f + hover_anim * 0.06f)),
+            rounding + glow_expand);
     }
 
-    const ImVec2 itemMin = ImGui::GetItemRectMin();
-    const ImVec2 itemMax = ImGui::GetItemRectMax();
-    const float boxSize = itemMax.y - itemMin.y;
-    const ImVec2 boxMin = itemMin;
-    const ImVec2 boxMax(itemMin.x + boxSize, itemMin.y + boxSize);
-    const float pad = (std::max)(2.0f, boxSize * 0.18f);
-    const float thickness = (std::max)(1.6f, boxSize * 0.10f);
+    if (ripple > 0.01f) {
+        const float ripple_t = 1.0f - ripple;
+        const float ripple_r = draw_size * (0.35f + ripple_t * 0.75f);
+        draw_list->AddCircleFilled(
+            box_center,
+            ripple_r,
+            ImGui::GetColorU32(ImVec4(kClrAccentHover.x, kClrAccentHover.y, kClrAccentHover.z, 0.14f * ripple)),
+            32);
+    }
 
-    const ImVec2 p1(boxMin.x + boxSize * 0.25f, boxMin.y + boxSize * 0.54f);
-    const ImVec2 p2(boxMin.x + boxSize * 0.45f, boxMax.y - pad);
-    const ImVec2 p3(boxMax.x - pad, boxMin.y + pad);
+    if (active) {
+        draw_list->AddRectFilled(draw_min, draw_max, ImGui::GetColorU32(ImVec4(bg.x * 0.92f, bg.y * 0.92f, bg.z * 0.92f, bg.w)), rounding);
+    } else {
+        draw_list->AddRectFilled(draw_min, draw_max, ImGui::GetColorU32(bg), rounding);
+    }
 
-    const ImVec2 center((boxMin.x + boxMax.x) * 0.5f, (boxMin.y + boxMax.y) * 0.5f);
-    const ImVec2 a(center.x + (p1.x - center.x) * progress, center.y + (p1.y - center.y) * progress);
-    const ImVec2 b(center.x + (p2.x - center.x) * progress, center.y + (p2.y - center.y) * progress);
-    const ImVec2 c(center.x + (p3.x - center.x) * progress, center.y + (p3.y - center.y) * progress);
+    const float border_thickness = lerp(1.1f, 1.6f, check_anim) + hover_anim * 0.35f;
+    draw_list->AddRect(draw_min, draw_max, ImGui::GetColorU32(border), rounding, 0, border_thickness);
 
-    ImVec4 checkColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    checkColor.w *= progress;
-    const ImU32 color = ImGui::GetColorU32(checkColor);
+    if (check_anim > 0.001f) {
+        const float mark_t = ease_out_back(check_anim);
+        const float pad = draw_size * 0.20f;
+        const ImVec2 p1(draw_min.x + draw_size * 0.24f, draw_min.y + draw_size * 0.52f);
+        const ImVec2 p2(draw_min.x + draw_size * 0.43f, draw_min.y + draw_size * 0.72f);
+        const ImVec2 p3(draw_max.x - pad, draw_min.y + pad);
 
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->AddLine(a, b, color, thickness);
-    drawList->AddLine(b, c, color, thickness);
-    return changed;
+        auto scale_pt = [&](const ImVec2& p) {
+            return ImVec2(box_center.x + (p.x - box_center.x) * mark_t, box_center.y + (p.y - box_center.y) * mark_t);
+        };
+
+        const float thickness = (std::max)(1.8f, draw_size * 0.12f);
+        const ImU32 check_col = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 0.95f * check_anim));
+        draw_list->AddLine(scale_pt(p1), scale_pt(p2), check_col, thickness);
+        draw_list->AddLine(scale_pt(p2), scale_pt(p3), check_col, thickness);
+    }
+
+    if (label_size.x > 0.0f) {
+        const ImVec4 text_base = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        const ImVec4 text_hover(kClrText.x + 0.08f, kClrText.y + 0.05f, kClrText.z + 0.06f, 1.0f);
+        ImVec4 text_col = lerp4(text_base, text_hover, hover_anim * 0.65f + check_anim * 0.15f);
+        if (*value) {
+            text_col.w = 1.0f;
+        }
+        const ImVec2 label_pos(pos.x + box_size + spacing, pos.y + (total_h - label_size.y) * 0.5f);
+        draw_list->AddText(label_pos, ImGui::GetColorU32(text_col), label);
+    }
+
+    ImGui::PopID();
+    return pressed;
 }
 
-bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue) {
+bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue, float width) {
     ImGui::PushID(label);
-    ImGui::TextUnformatted(label);
 
     char valueText[32];
     std::snprintf(valueText, sizeof(valueText), "%d%%", *value);
     const ImVec2 valueTextSize = ImGui::CalcTextSize(valueText);
+    const float content_width = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
 
-    // reserve space on the right so the % doesn't overlap the slider track
-    const float gapRight = 10.0f;
-    float availWidth = ImGui::GetContentRegionAvail().x;
-    float sliderWidth = availWidth - valueTextSize.x - gapRight;
-    if (sliderWidth < 60.0f) {
-        sliderWidth = availWidth; // fallback: not enough room, keep it inside
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0.0f, 0.0f));
+    if (ImGui::BeginTable(
+            "##slider_hdr",
+            2,
+            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX | ImGuiTableFlags_NoPadOuterX,
+            ImVec2(content_width, 0.0f))) {
+        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, valueTextSize.x + 4.0f);
+        ImGui::TableNextRow(0, ImGui::GetTextLineHeight());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(label);
+        ImGui::TableNextColumn();
+        const float col_w = ImGui::GetColumnWidth();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + col_w - valueTextSize.x);
+        ImGui::TextDisabled("%s", valueText);
+        ImGui::EndTable();
     }
-    ImGui::SetNextItemWidth(sliderWidth);
+    ImGui::PopStyleVar();
 
+    ImGui::SetCursorPosX(kPanelPad);
+    ImGui::SetNextItemWidth(content_width);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
@@ -414,6 +605,7 @@ bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     bool changed = ImGui::SliderInt("##animated_slider", value, minValue, maxValue, "%d");
     ImGui::PopStyleColor(5);
+    ImGui::PopStyleVar();
 
     const ImVec2 frameMin = ImGui::GetItemRectMin();
     const ImVec2 frameMax = ImGui::GetItemRectMax();
@@ -443,38 +635,29 @@ bool AnimatedIntSlider(const char* label, int* value, int minValue, int maxValue
     const ImVec2 trackMax(frameMax.x, centerY + visualHeight * 0.5f);
 
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(trackMin, trackMax, ImGui::GetColorU32(ImVec4(0.14f, 0.16f, 0.20f, 1.0f)), rounding);
-    draw->AddRectFilled(trackMin, ImVec2(knobX, trackMax.y), ImGui::GetColorU32(ImVec4(0.32f, 0.61f, 0.93f, 0.95f)), rounding);
+    draw->AddRectFilled(trackMin, trackMax, ImGui::GetColorU32(kClrSurface), rounding);
+    draw->AddRectFilled(trackMin, ImVec2(knobX, trackMax.y), ImGui::GetColorU32(kClrAccent), rounding);
 
-    const ImU32 knobColor = ImGui::GetColorU32(ImGui::IsItemActive() ? ImVec4(0.92f, 0.97f, 1.0f, 1.0f) : ImVec4(0.82f, 0.90f, 0.98f, 1.0f));
+    const ImU32 knobColor = ImGui::GetColorU32(
+        ImGui::IsItemActive() ? kClrSliderKnobActive : kClrSliderKnob);
     draw->AddCircleFilled(ImVec2(knobX, centerY), knobRadius, knobColor, 24);
-    draw->AddCircle(ImVec2(knobX, centerY), knobRadius, ImGui::GetColorU32(ImVec4(0.12f, 0.18f, 0.28f, 0.65f)), 24, 1.0f);
-
-    // draw percent for slider
-    const float textX = (sliderWidth <= availWidth - valueTextSize.x - gapRight + 0.01f)
-        ? (frameMax.x + gapRight * 0.5f)
-        : (frameMax.x - valueTextSize.x - 8.0f);
-    const float textY = centerY - valueTextSize.y * 0.5f;
-    draw->AddText(ImVec2(textX, textY), ImGui::GetColorU32(ImVec4(0.86f, 0.91f, 0.97f, 0.95f)), valueText);
+    draw->AddCircle(ImVec2(knobX, centerY), knobRadius, ImGui::GetColorU32(ImVec4(0.06f, 0.07f, 0.08f, 0.55f)), 24, 1.0f);
 
     ImGui::PopID();
     return changed;
 }
 
 // especially buttons :D but need to improve
-static bool GradientButton(const char* label, const ImVec2& size, ImVec4 baseL, ImVec4 baseR, ImVec4 hoverL, ImVec4 hoverR) {
-    auto hash32 = [](uint32_t x) -> uint32_t {
-        x ^= x >> 16;
-        x *= 0x7FEB352Du;
-        x ^= x >> 15;
-        x *= 0x846CA68Bu;
-        x ^= x >> 16;
-        return x;
-    };
-    auto hash01 = [&](uint32_t x) -> float {
-        return (hash32(x) & 0x00FFFFFFu) / 16777215.0f;
-    };
-
+static bool GradientButton(
+    const char* label,
+    const ImVec2& size,
+    ImVec4 baseL,
+    ImVec4 baseR,
+    ImVec4 hoverL,
+    ImVec4 hoverR,
+    float rounding_override,
+    bool uniform_fill,
+    bool accent_glow) {
     ImGui::PushID(label);
     const ImGuiID id = ImGui::GetID("##grad_btn");
 
@@ -487,15 +670,22 @@ static bool GradientButton(const char* label, const ImVec2& size, ImVec4 baseL, 
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
 
-    // maybe smooth... work not stable
     ImGuiStorage* st = ImGui::GetStateStorage();
     const ImGuiID animId = id ^ 0xA8D3C2F1u;
+    const ImGuiID pressAnimId = id ^ 0xC0FFEE01u;
+    const float dt = ImGui::GetIO().DeltaTime;
+
     float t = st->GetFloat(animId, hovered ? 1.0f : 0.0f);
-    const float target = hovered ? 1.0f : 0.0f;
-    const float speed = active ? 20.0f : 12.0f;
-    const float lerp = (std::min)(1.0f, ImGui::GetIO().DeltaTime * speed);
-    t = t + (target - t) * lerp;
+    const float hover_target = hovered ? 1.0f : 0.0f;
+    const float hover_speed = 12.0f;
+    t += (hover_target - t) * (std::min)(1.0f, dt * hover_speed);
     st->SetFloat(animId, t);
+
+    float press_t = st->GetFloat(pressAnimId, 0.0f);
+    const float press_target = active ? 1.0f : 0.0f;
+    const float press_speed = active ? 24.0f : 18.0f;
+    press_t += (press_target - press_t) * (std::min)(1.0f, dt * press_speed);
+    st->SetFloat(pressAnimId, press_t);
 
     auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
     auto mix = [&](const ImVec4& a, const ImVec4& b, float x) -> ImVec4 {
@@ -506,93 +696,200 @@ static bool GradientButton(const char* label, const ImVec2& size, ImVec4 baseL, 
     const ImVec4 baseMid((baseL.x + baseR.x) * 0.5f, (baseL.y + baseR.y) * 0.5f, (baseL.z + baseR.z) * 0.5f, 1.0f);
     const ImVec4 hoverMid((hoverL.x + hoverR.x) * 0.5f, (hoverL.y + hoverR.y) * 0.5f, (hoverL.z + hoverR.z) * 0.5f, 1.0f);
     ImVec4 mid = mix(baseMid, hoverMid, t);
-    if (active) {
-        mid.x *= 0.92f; mid.y *= 0.92f; mid.z *= 0.92f;
-    }
+    const float press_shade = 1.0f - press_t * 0.10f;
+    mid.x *= press_shade;
+    mid.y *= press_shade;
+    mid.z *= press_shade;
 
-    const float rounding = s.y * 0.45f;
+    const float inset = press_t * 1.5f;
+    const ImVec2 draw_pos(pos.x + inset, pos.y + inset);
+    const ImVec2 draw_p2(pos.x + s.x - inset, pos.y + s.y - inset);
+    const float draw_h = draw_p2.y - draw_pos.y;
+    const float rounding = rounding_override >= 0.0f ? rounding_override : draw_h * 0.45f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 p2(pos.x + s.x, pos.y + s.y);
 
-    // rounded rect
-    dl->AddRectFilled(pos, p2, ImGui::GetColorU32(mid), rounding);
+    dl->AddRectFilled(draw_pos, draw_p2, ImGui::GetColorU32(mid), rounding);
 
-    // animated on hover
-    ImVec4 top = mid;
-    top.x = clamp01(top.x + 0.10f * t);
-    top.y = clamp01(top.y + 0.10f * t);
-    top.z = clamp01(top.z + 0.14f * t);
-    top.w = 0.26f + 0.26f * t;
-    dl->AddRectFilled(pos, ImVec2(p2.x, pos.y + s.y * 0.54f), ImGui::GetColorU32(top), rounding, ImDrawFlags_RoundCornersTop);
+    if (!uniform_fill) {
+        ImVec4 top = mid;
+        top.x = clamp01(top.x + 0.10f * t);
+        top.y = clamp01(top.y + 0.10f * t);
+        top.z = clamp01(top.z + 0.14f * t);
+        top.w = 0.26f + 0.26f * t;
+        dl->AddRectFilled(draw_pos, ImVec2(draw_p2.x, draw_pos.y + draw_h * 0.54f), ImGui::GetColorU32(top), rounding, ImDrawFlags_RoundCornersTop);
 
-    ImVec4 bot = mid;
-    bot.w = 0.22f + 0.18f * t;
-    dl->AddRectFilled(ImVec2(pos.x, pos.y + s.y * 0.56f), p2,
-        ImGui::GetColorU32(ImVec4(bot.x * 0.75f, bot.y * 0.75f, bot.z * 0.75f, bot.w)),
-        rounding,
-        ImDrawFlags_RoundCornersBottom);
-
-    // pif-paf
-    {
-        const ImGuiID hoverId = id ^ 0xE11A7E01u;
-        const ImGuiID burstId = id ^ 0xB0757001u;
-        const ImGuiID burstXId = id ^ 0xB0757002u;
-        const ImGuiID burstYId = id ^ 0xB0757003u;
-
-        const bool wasHovered = st->GetBool(hoverId, false);
-        if (hovered && !wasHovered) {
-            st->SetFloat(burstId, 1.0f); // trigger burst once on hover-enter
-            ImVec2 mp = ImGui::GetIO().MousePos;
-            if (mp.x < pos.x) mp.x = pos.x;
-            if (mp.y < pos.y) mp.y = pos.y;
-            if (mp.x > p2.x) mp.x = p2.x;
-            if (mp.y > p2.y) mp.y = p2.y;
-            st->SetFloat(burstXId, mp.x);
-            st->SetFloat(burstYId, mp.y);
-        }
-        st->SetBool(hoverId, hovered);
-
-        float burst = st->GetFloat(burstId, 0.0f);
-        if (burst > 0.0f) {
-            burst = (std::max)(0.0f, burst - ImGui::GetIO().DeltaTime * 4.2f);
-            st->SetFloat(burstId, burst);
-
-            const float p = 1.0f - burst; // 0..1
-            const ImVec2 c(st->GetFloat(burstXId, pos.x + s.x * 0.5f), st->GetFloat(burstYId, pos.y + s.y * 0.5f));
-            const float maxR = (std::min)(s.x, s.y) * 0.86f;
-            const float r = 8.0f + maxR * p;
-            const float aBurst = 0.38f * (1.0f - p) * (0.55f + 0.45f * t);
-
-            dl->PushClipRect(pos, p2, true);
-            dl->AddCircle(c, r, ImGui::GetColorU32(ImVec4(0.45f, 0.62f, 0.95f, aBurst)), 64, 2.6f);
-            dl->AddCircle(c, r * 0.78f, ImGui::GetColorU32(ImVec4(0.98f, 0.88f, 0.55f, aBurst * 0.75f)), 64, 1.8f);
-
-            for (int k = 0; k < 7; ++k) {
-                const float ang = (hash01(static_cast<uint32_t>(id) ^ static_cast<uint32_t>(k * 911u)) * 6.2831853f);
-                const float len = 6.0f + 10.0f * hash01(static_cast<uint32_t>(id) ^ static_cast<uint32_t>(k * 131u));
-                const ImVec2 dir(std::cos(ang), std::sin(ang));
-                const ImVec2 a0(c.x + dir.x * (r * 0.35f), c.y + dir.y * (r * 0.35f));
-                const ImVec2 a1(c.x + dir.x * (r * 0.35f + len), c.y + dir.y * (r * 0.35f + len));
-                dl->AddLine(a0, a1, ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, aBurst * 0.95f)), 2.0f);
-            }
-            dl->PopClipRect();
+        ImVec4 bot = mid;
+        bot.w = 0.22f + 0.18f * t;
+        dl->AddRectFilled(ImVec2(draw_pos.x, draw_pos.y + draw_h * 0.56f), draw_p2,
+            ImGui::GetColorU32(ImVec4(bot.x * 0.75f, bot.y * 0.75f, bot.z * 0.75f, bot.w)),
+            rounding,
+            ImDrawFlags_RoundCornersBottom);
+    } else if (t > 0.01f) {
+        if (accent_glow) {
+            dl->AddRectFilled(
+                draw_pos,
+                draw_p2,
+                ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.10f * t)),
+                rounding);
+        } else {
+            dl->AddRectFilled(
+                draw_pos,
+                draw_p2,
+                ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 0.09f * t)),
+                rounding);
         }
     }
 
-    dl->AddRect(pos, p2, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.10f + 0.25f * t)), rounding, 0, 1.0f);
-    if (t > 0.01f) {
-        dl->AddRect(ImVec2(pos.x - 1.0f, pos.y - 1.0f), ImVec2(p2.x + 1.0f, p2.y + 1.0f),
-            ImGui::GetColorU32(ImVec4(0.45f, 0.62f, 0.95f, 0.12f * t)), rounding + 1.0f, 0, 2.4f);
-        dl->AddRect(ImVec2(pos.x - 3.0f, pos.y - 3.0f), ImVec2(p2.x + 3.0f, p2.y + 3.0f),
-            ImGui::GetColorU32(ImVec4(0.35f, 0.80f, 0.95f, 0.06f * t)), rounding + 3.0f, 0, 3.0f);
+    const float border_alpha = accent_glow ? (0.10f + 0.25f * t) : (0.08f + 0.14f * t);
+    dl->AddRect(draw_pos, draw_p2, ImGui::GetColorU32(ImVec4(1, 1, 1, border_alpha)), rounding, 0, 1.0f);
+    if (t > 0.01f && accent_glow) {
+        const float glow_expand = uniform_fill ? 1.0f : 3.0f;
+        dl->AddRect(
+            ImVec2(draw_pos.x - glow_expand, draw_pos.y - glow_expand),
+            ImVec2(draw_p2.x + glow_expand, draw_p2.y + glow_expand),
+            ImGui::GetColorU32(ImVec4(kClrAccent.x, kClrAccent.y, kClrAccent.z, (uniform_fill ? 0.18f : 0.12f) * t)),
+            rounding + glow_expand,
+            0,
+            uniform_fill ? 1.6f : 2.4f);
+        if (!uniform_fill) {
+            dl->AddRect(
+                ImVec2(draw_pos.x - 3.0f, draw_pos.y - 3.0f),
+                ImVec2(draw_p2.x + 3.0f, draw_p2.y + 3.0f),
+                ImGui::GetColorU32(ImVec4(kClrAccentHover.x, kClrAccentHover.y, kClrAccentHover.z, 0.06f * t)),
+                rounding + 3.0f,
+                0,
+                3.0f);
+        }
     }
 
     const ImVec2 ts = ImGui::CalcTextSize(label);
-    const ImVec2 tp(pos.x + (s.x - ts.x) * 0.5f, pos.y + (s.y - ts.y) * 0.5f - 1.0f);
-    dl->AddText(tp, ImGui::GetColorU32(ImVec4(0.90f, 0.94f, 0.98f, 1.0f)), label);
+    const float text_y = draw_pos.y + (draw_h - ts.y) * 0.5f - 1.0f + press_t * 0.5f;
+    const ImVec2 tp(draw_pos.x + (draw_p2.x - draw_pos.x - ts.x) * 0.5f, text_y);
+    dl->AddText(tp, ImGui::GetColorU32(accent_glow ? ImVec4(0.96f, 0.97f, 0.98f, 1.0f) : kClrText), label);
 
     ImGui::PopID();
     return pressed;
+}
+
+void DrawPanelBorder(ImDrawList* draw_list, const ImVec2& min, const ImVec2& max, float rounding) {
+    draw_list->AddRect(
+        min,
+        max,
+        ImGui::ColorConvertFloat4ToU32(kClrBorderSubtle),
+        rounding,
+        0,
+        1.0f);
+}
+
+void DrawPanelTitle(const char* title, const ImVec2& panel_min, float panel_width) {
+    const ImVec2 title_size = ImGui::CalcTextSize(title);
+    const float title_x = panel_min.x + (panel_width - title_size.x) * 0.5f;
+    const float title_y = panel_min.y - title_size.y * 0.5f + 2.0f;
+    const ImU32 child_bg = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
+    const ImU32 title_col = ImGui::GetColorU32(kClrTextTitle);
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float cover_pad_x = 12.0f;
+    const float cover_pad_y = 4.0f;
+    draw_list->AddRectFilled(
+        ImVec2(title_x - cover_pad_x, title_y - cover_pad_y),
+        ImVec2(title_x + title_size.x + cover_pad_x, title_y + title_size.y + cover_pad_y),
+        child_bg);
+
+    ImGui::GetForegroundDrawList()->AddText(ImVec2(title_x, title_y), title_col, title);
+
+    ImGui::Dummy(ImVec2(0.0f, title_size.y * 0.5f + kPanelTitleGap));
+}
+
+void BeginPanelContent() {
+    ImGui::SetCursorPosX(kPanelPad);
+}
+
+float PanelContentWidth() {
+    return ImGui::GetWindowSize().x - kPanelPad * 2.0f;
+}
+
+void AlignLabelLeft(const char* label) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+}
+
+void VCenterInRow(float row_h) {
+    const float frame_h = ImGui::GetFrameHeight();
+    if (row_h > frame_h) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (row_h - frame_h) * 0.5f);
+    }
+}
+
+std::string FitTextToWidth(const char* text, float max_width) {
+    if (!text || text[0] == '\0' || max_width <= 1.0f) {
+        return text ? text : "";
+    }
+    if (ImGui::CalcTextSize(text).x <= max_width) {
+        return text;
+    }
+
+    std::string fitted(text);
+    const char* ellipsis = "...";
+    while (!fitted.empty()) {
+        fitted.pop_back();
+        if (ImGui::CalcTextSize((fitted + ellipsis).c_str()).x <= max_width) {
+            fitted += ellipsis;
+            break;
+        }
+    }
+    return fitted.empty() ? "..." : fitted;
+}
+
+void RenderFileInfoList(const FileInfo& info, float content_w, float row_h) {
+    const ImVec4 arch_color = kClrAccent;
+
+    struct InfoRow {
+        const char* label;
+        const char* value;
+        const ImVec4* color;
+    };
+
+    const InfoRow rows[] = {
+        {"File", info.filePath.c_str(), nullptr},
+        {"Architecture", info.architecture.c_str(), &arch_color},
+        {"Image Base", info.imageBase.c_str(), nullptr},
+        {"Image Size", info.imageSize.c_str(), nullptr},
+        {"Entry Point", info.entryPoint.c_str(), nullptr},
+        {"Sections", info.sectionCount.c_str(), nullptr},
+    };
+
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0.0f, 5.0f));
+    if (ImGui::BeginTable(
+            "##file_info",
+            2,
+            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX | ImGuiTableFlags_NoPadOuterX,
+            ImVec2(content_w, 0.0f))) {
+        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, kInfoLabelWidth);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+
+        for (const InfoRow& row : rows) {
+            ImGui::TableNextRow(0, row_h);
+            ImGui::TableNextColumn();
+            VCenterInRow(row_h);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", row.label);
+            ImGui::TableNextColumn();
+            VCenterInRow(row_h);
+            ImGui::AlignTextToFramePadding();
+            const std::string fitted = FitTextToWidth(row.value, ImGui::GetContentRegionAvail().x);
+            if (row.color) {
+                ImGui::PushStyleColor(ImGuiCol_Text, *row.color);
+            }
+            ImGui::TextUnformatted(fitted.c_str());
+            if (row.color) {
+                ImGui::PopStyleColor();
+            }
+        }
+
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
 }
 
 void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
@@ -603,22 +900,24 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse;
 
     if (ImGui::Begin("pe-packer GUI", nullptr, windowFlags)) {
         // title bar
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, kClrTextTitle);
         ImGui::Text("pe-packer");
         const ImVec2 titleTextMin = ImGui::GetItemRectMin();
         const ImVec2 titleTextMax = ImGui::GetItemRectMax();
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::TextDisabled("| Version 1.0.3");
+        ImGui::TextDisabled("|  Version 1.0.4");
         const ImVec2 versionTextMin = ImGui::GetItemRectMin();
         const ImVec2 versionTextMax = ImGui::GetItemRectMax();
         
         // title bar icons
-        const float iconSize = 22.0f;
+        const float iconSize = 20.0f;
         const float iconSpacing = 10.0f;
         const float rightPadding = 6.0f;
         float windowRight = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x;
@@ -629,9 +928,9 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         const float iconsY = lineMinY + (lineH - iconSize) * 0.5f;
         ImGui::SetCursorScreenPos(ImVec2(windowRight - rightPadding - btnRowWidth, iconsY));
 
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.18f, 0.22f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.29f, 0.47f, 0.83f, 0.20f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.24f, 0.40f, 0.75f, 0.30f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(kClrPanel.x + 0.02f, kClrPanel.y + 0.02f, kClrPanel.z + 0.01f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(kClrAccent.x, kClrAccent.y, kClrAccent.z, 0.20f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(kClrAccentActive.x, kClrAccentActive.y, kClrAccentActive.z, 0.30f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
         
         if (ImGui::Button("##min_btn", ImVec2(iconSize, iconSize))) {
@@ -647,7 +946,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             float lineHalf = iconSize * 0.22f;
             bool hov = ImGui::IsItemHovered();
             bool act = ImGui::IsItemActive();
-            ImVec4 col = hov || act ? ImVec4(0.45f, 0.62f, 0.95f, 1.0f) : ImVec4(0.82f, 0.88f, 0.95f, 1.0f);
+            ImVec4 col = hov || act ? kClrAccentHover : kClrTextTitle;
             ImU32 colorU32 = ImGui::GetColorU32(col);
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddLine(ImVec2(cx - lineHalf, cy), ImVec2(cx + lineHalf, cy), colorU32, 2.0f);
@@ -676,7 +975,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
             float pad = iconSize * 0.24f;
             bool hov = ImGui::IsItemHovered();
             bool act = ImGui::IsItemActive();
-            ImVec4 col = hov || act ? ImVec4(0.91f, 0.48f, 0.40f, 1.0f) : ImVec4(0.82f, 0.88f, 0.95f, 1.0f);
+            ImVec4 col = hov || act ? kClrLogErr : kClrTextTitle;
             ImU32 colorU32 = ImGui::GetColorU32(col);
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddLine(ImVec2(bmin.x + pad, bmin.y + pad), ImVec2(bmax.x - pad, bmax.y - pad), colorU32, 2.0f);
@@ -688,36 +987,24 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         
         ImGui::Spacing();
 
-        const float browseWidth = 110.0f;
-        const float minFieldWidth = 160.0f;
-        const float pathLabelWidth = (std::max)(ImGui::CalcTextSize("Input file").x, ImGui::CalcTextSize("Output file").x);
         ImGuiStyle& style = ImGui::GetStyle();
 
-        auto fileInputRow = [&](const char* label,
-                                 std::array<char, MAX_PATH>& fullBuffer,
-                                 std::array<char, MAX_PATH>& displayBuffer,
-                                 auto&& browseFn,
-                                 bool isInput) -> bool {
-            ImGui::PushID(label);
-            const float rowStartX = ImGui::GetCursorPosX();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(label);
-            ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
-            ImGui::SetCursorPosX(rowStartX + pathLabelWidth + style.ItemInnerSpacing.x);
-            float avail = ImGui::GetContentRegionAvail().x;
-            float fieldWidth = avail - browseWidth - style.ItemSpacing.x;
-            if (fieldWidth < minFieldWidth) {
-                fieldWidth = minFieldWidth;
-            }
-            ImGui::SetNextItemWidth(fieldWidth);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, style.FramePadding.y * 0.62f));
-            
+        bool inputEdited = false;
+        bool outputEdited = false;
+        const float path_row_h = ImGui::GetFrameHeight();
+        const float pack_block_h = path_row_h * 2.0f;
+        ImVec2 browse_top_min(0.0f, 0.0f);
+        ImVec2 browse_bottom_max(0.0f, 0.0f);
+
+        auto drawPathField = [&](std::array<char, MAX_PATH>& fullBuffer,
+                                  std::array<char, MAX_PATH>& displayBuffer,
+                                  bool isInput,
+                                  auto&& browseFn) -> bool {
             ImVec2 fieldMin = ImGui::GetCursorScreenPos();
             const float fieldHeight = ImGui::GetFrameHeight();
-            ImVec2 fieldMaxGuess(fieldMin.x + fieldWidth, fieldMin.y + fieldHeight);
+            ImVec2 fieldMaxGuess(fieldMin.x + ImGui::GetColumnWidth(), fieldMin.y + fieldHeight);
 
             bool showFull = isInput ? state.inputShowFullPath : state.outputShowFullPath;
-            // if user clicked inside the field this frame we gonna show full path
             if (ImGui::IsMouseClicked(0) && ImGui::IsMouseHoveringRect(fieldMin, fieldMaxGuess, true)) {
                 showFull = true;
             }
@@ -726,9 +1013,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                 CopyShortStringToBuffer(std::string(fullBuffer.data()), displayBuffer);
             }
 
-            bool editedFromInput = false;
-
-            // apply drag&drop before drawing the input
+            bool edited = false;
             if (g_hasDroppedFile && g_dropToInput == isInput) {
                 CopyStringToBuffer(g_droppedFilePath, fullBuffer);
                 if (isInput) {
@@ -739,59 +1024,124 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                 if (!showFull) {
                     CopyShortStringToBuffer(g_droppedFilePath, displayBuffer);
                 }
-                editedFromInput = true;
+                edited = true;
                 g_hasDroppedFile = false;
             }
 
             const ImGuiInputTextFlags inputFlags = showFull ? 0 : ImGuiInputTextFlags_ReadOnly;
             char* inputPtr = showFull ? fullBuffer.data() : displayBuffer.data();
-            editedFromInput = ImGui::InputText("##path", inputPtr, static_cast<int>(fullBuffer.size()), inputFlags) || editedFromInput;
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            edited = ImGui::InputText("##path", inputPtr, static_cast<int>(fullBuffer.size()), inputFlags) || edited;
 
             const float inputHeight = ImGui::GetItemRectSize().y;
-
-            if (isInput) {
-                state.inputShowFullPath = ImGui::IsItemActive();
-            } else {
-                state.outputShowFullPath = ImGui::IsItemActive();
-            }
-            ImGui::PopStyleVar();
-            
-            // store field bounds
             ImVec2 fieldMax = ImGui::GetItemRectMax();
             if (isInput) {
                 g_inputFieldMin = fieldMin;
                 g_inputFieldMax = fieldMax;
+                state.inputShowFullPath = ImGui::IsItemActive();
             } else {
                 g_outputFieldMin = fieldMin;
                 g_outputFieldMax = fieldMax;
+                state.outputShowFullPath = ImGui::IsItemActive();
             }
 
             if (ImGui::BeginDragDropTarget()) {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("FILE")) {
+                    (void)payload;
                 }
                 ImGui::EndDragDropTarget();
             }
-            
-            ImGui::SameLine();
+
+            ImGui::TableNextColumn();
+            ImGui::Dummy(ImVec2(kBrowseGap, 1.0f));
+            ImGui::TableNextColumn();
             if (GradientButton(
                     "Browse",
-                    ImVec2(browseWidth, inputHeight),
-                    ImVec4(0.12f, 0.14f, 0.18f, 1.0f),
-                    ImVec4(0.16f, 0.18f, 0.22f, 1.0f),
-                    ImVec4(0.18f, 0.21f, 0.28f, 1.0f),
-                    ImVec4(0.24f, 0.28f, 0.36f, 1.0f)) && browseFn()) {
-                editedFromInput = true;
+                    ImVec2(kBrowseBtnWidth, inputHeight),
+                    kClrBtnNeutralLo,
+                    kClrBtnNeutralHi,
+                    kClrSurfaceHi,
+                    ImVec4(kClrSurfaceHi.x + 0.03f, kClrSurfaceHi.y + 0.03f, kClrSurfaceHi.z + 0.02f, 1.0f),
+                    8.0f,
+                    true,
+                    false) && browseFn()) {
+                edited = true;
             }
-            ImGui::PopID();
-            return editedFromInput;
+            if (isInput) {
+                browse_top_min = ImGui::GetItemRectMin();
+            } else {
+                browse_bottom_max = ImGui::GetItemRectMax();
+            }
+            return edited;
         };
 
-        if (fileInputRow("Input file", state.input, state.inputDisplay, [&]() { return BrowseInputFile(state); }, true)) {
+        if (ImGui::BeginTable(
+                "FilePathsLayout",
+                3,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX | ImGuiTableFlags_NoPadOuterX,
+                ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+            ImGui::TableSetupColumn("paths", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("gap", ImGuiTableColumnFlags_WidthFixed, kBrowseGap);
+            ImGui::TableSetupColumn("pack", ImGuiTableColumnFlags_WidthFixed, kPackBtnWidth);
+
+            ImGui::TableNextRow(0, pack_block_h);
+            ImGui::TableNextColumn();
+
+            if (ImGui::BeginTable("FilePaths", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX)) {
+                ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, kFormLabelWidth);
+                ImGui::TableSetupColumn("field", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("gap", ImGuiTableColumnFlags_WidthFixed, kBrowseGap);
+                ImGui::TableSetupColumn("browse", ImGuiTableColumnFlags_WidthFixed, kBrowseBtnWidth);
+
+                ImGui::TableNextRow(0, path_row_h);
+                ImGui::TableNextColumn();
+                VCenterInRow(path_row_h);
+                AlignLabelLeft("Input file");
+                ImGui::TableNextColumn();
+                VCenterInRow(path_row_h);
+                ImGui::PushID("input");
+                inputEdited = drawPathField(state.input, state.inputDisplay, true, [&]() { return BrowseInputFile(state); });
+                ImGui::PopID();
+
+                ImGui::TableNextRow(0, path_row_h);
+                ImGui::TableNextColumn();
+                VCenterInRow(path_row_h);
+                AlignLabelLeft("Output file");
+                ImGui::TableNextColumn();
+                VCenterInRow(path_row_h);
+                ImGui::PushID("output");
+                outputEdited = drawPathField(state.output, state.outputDisplay, false, [&]() { return BrowseOutputFile(state); });
+                ImGui::PopID();
+
+                ImGui::EndTable();
+            }
+
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            const float pack_btn_h = browse_bottom_max.y - browse_top_min.y;
+            const ImVec2 pack_col_pos = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(ImVec2(pack_col_pos.x, browse_top_min.y));
+            if (GradientButton(
+                    "Pack",
+                    ImVec2(kPackBtnWidth, pack_btn_h),
+                    kClrPackLo,
+                    kClrPackHi,
+                    kClrPackHoverLo,
+                    kClrPackHoverHi,
+                    8.0f,
+                    true,
+                    true)) {
+                lastSuccess = ExecutePacking(state, statusMessage);
+            }
+
+            ImGui::EndTable();
+        }
+
+        if (inputEdited) {
             SetDefaultOutputFromInput(state);
             ExtractFileInfo(state);
         }
-
-        if (fileInputRow("Output file", state.output, state.outputDisplay, [&]() { return BrowseOutputFile(state); }, false)) {
+        if (outputEdited) {
             state.outputCustomized = true;
         }
 
@@ -800,228 +1150,137 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         ImGui::Spacing();
 
         // reserve space for logs at the bottom
-        float logsHeight = 200.0f;
-        float middleSectionHeight = ImGui::GetContentRegionAvail().y - logsHeight - style.ItemSpacing.y;
-        if (middleSectionHeight < 100.0f) {
-            middleSectionHeight = 100.0f;
+        float middleSectionHeight = ImGui::GetContentRegionAvail().y - kLogsHeight - style.ItemSpacing.y;
+        if (middleSectionHeight < 80.0f) {
+            middleSectionHeight = 80.0f;
         }
 
-        float leftColumnWidth = ImGui::GetContentRegionAvail().x * 0.55f;
-        float rightColumnWidth = ImGui::GetContentRegionAvail().x * 0.45f - style.ItemSpacing.x;
-        
-        if (ImGui::BeginChild("OptionsColumn", ImVec2(leftColumnWidth, middleSectionHeight), false)) {
-			// rounded border
-            const float panelRounding = 16.0f;
-            const ImVec4 borderCol = ImVec4(0.29f, 0.47f, 0.83f, 0.32f);
-            ImDrawList* colDraw = ImGui::GetWindowDrawList();
-            ImVec2 colMin = ImGui::GetWindowPos();
-            ImVec2 colMax = ImVec2(colMin.x + ImGui::GetWindowSize().x, colMin.y + ImGui::GetWindowSize().y);
-            colDraw->AddRect(colMin, colMax, ImGui::ColorConvertFloat4ToU32(borderCol), panelRounding, 0, 1.0f);
+        const float columns_avail = ImGui::GetContentRegionAvail().x;
+        const float column_gap = style.ItemSpacing.x;
+        const float leftColumnWidth = (columns_avail - column_gap) * 0.52f;
+        const float rightColumnWidth = columns_avail - column_gap - leftColumnWidth;
+        const float option_row_h = ImGui::GetFrameHeight();
+        const ImVec2 panel_child_pad(8.0f, 8.0f);
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
-            const char* optionsTitle = "Options";
-            float optionsTextWidth = ImGui::CalcTextSize(optionsTitle).x;
-            float optionsAvailableWidth = ImGui::GetContentRegionAvail().x;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (optionsAvailableWidth - optionsTextWidth) * 0.5f);
-            const ImVec2 titleScreenPos = ImGui::GetCursorScreenPos();
-            const ImVec2 titleSize = ImGui::CalcTextSize(optionsTitle);
-            const float textShiftY = -6.0f;
-            const ImVec2 shiftedTitlePos(titleScreenPos.x, titleScreenPos.y + textShiftY);
-            const ImU32 childBg = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
-            const float coverPadX = 14.0f;
-            const float coverTop = shiftedTitlePos.y - 2.0f;
-            const float coverBottom = shiftedTitlePos.y + titleSize.y + 4.0f;
-            colDraw->AddRectFilled(
-                ImVec2(shiftedTitlePos.x - coverPadX, coverTop),
-                ImVec2(shiftedTitlePos.x + titleSize.x + coverPadX, coverBottom),
-                childBg,
-                0.0f);
-            ImGui::GetForegroundDrawList()->AddText(
-                shiftedTitlePos,
-                ImGui::GetColorU32(ImVec4(0.82f, 0.88f, 0.95f, 1.0f)),
-                optionsTitle);
-            ImGui::Dummy(ImVec2(0.0f, titleSize.y));
-            ImGui::PopStyleColor();
-            
-            ImGui::Spacing();
-            ImGui::Indent(4.0f);
-            
-            AnimatedIntSlider("Complexity percentage", &state.mutationBase, 1, 100);
-            //ImGui::SameLine();
-            //ImGui::TextDisabled("Mutations count");
-            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 4.f));
-            if (ImGui::BeginTable("OptionsFlags", 2, ImGuiTableFlags_SizingStretchProp)) {
-                auto checkbox = [](const char* label, bool* value) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, panel_child_pad);
+        if (ImGui::BeginChild("OptionsColumn", ImVec2(leftColumnWidth, middleSectionHeight), false, kPanelChildFlags)) {
+            const float panel_w = ImGui::GetWindowSize().x;
+            const ImVec2 col_min = ImGui::GetWindowPos();
+            const ImVec2 col_max(col_min.x + panel_w, col_min.y + ImGui::GetWindowSize().y);
+            DrawPanelBorder(ImGui::GetWindowDrawList(), col_min, col_max, 12.0f);
+            DrawPanelTitle("Options", col_min, panel_w);
+
+            const float content_w = PanelContentWidth();
+            BeginPanelContent();
+            AnimatedIntSlider("Complexity percentage", &state.mutationBase, 1, 100, content_w);
+
+            BeginPanelContent();
+            const float checkbox_cell_pad_y = 2.0f;
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0.0f, checkbox_cell_pad_y));
+            if (ImGui::BeginTable(
+                    "OptionsFlags",
+                    3,
+                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX | ImGuiTableFlags_NoPadOuterX,
+                    ImVec2(content_w, 0.0f))) {
+                ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("gap", ImGuiTableColumnFlags_WidthFixed, kOptionsColumnGap);
+                ImGui::TableSetupColumn("right", ImGuiTableColumnFlags_WidthStretch);
+
+                auto option_pair = [&](const char* left_label, bool* left_value, const char* right_label, bool* right_value) {
+                    ImGui::TableNextRow(ImGuiTableRowFlags_None, option_row_h);
                     ImGui::TableNextColumn();
-                    AnimatedCheckbox(label, value);
+                    VCenterInRow(option_row_h);
+                    AnimatedCheckbox(left_label, left_value);
+                    ImGui::TableNextColumn();
+                    ImGui::TableNextColumn();
+                    VCenterInRow(option_row_h);
+                    AnimatedCheckbox(right_label, right_value);
                 };
-                ImGui::TableNextColumn();
-                AnimatedCheckbox("Remove ASLR", &state.removeAslr);
 
+                option_pair("Remove ASLR", &state.removeAslr, "OEP call obfuscation", &state.obfuscateOep);
+                option_pair("Anti-disassembly", &state.antiDisasm, "Mixed Boolean Arithmetic", &state.mba);
+                option_pair("Encrypt sections", &state.encryptSections, "Generate fake instructions", &state.fakeInstructions);
+
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, option_row_h);
                 ImGui::TableNextColumn();
-                AnimatedCheckbox("OEP call obfuscation", &state.obfuscateOep);
-                checkbox("Anti-disassembly", &state.antiDisasm);
-                checkbox("Mixed Boolean Arithmetic", &state.mba);
-                checkbox("Encrypt sections", &state.encryptSections);
-                checkbox("Generate fake instructions", &state.fakeInstructions);
+                VCenterInRow(option_row_h);
+                if (AnimatedCheckbox("Encrypt function", &state.packFunctions)) {
+                    if (!state.packFunctions) {
+                        state.fpackStart.fill(0);
+                        state.fpackEnd.fill(0);
+                    }
+                }
+                ImGui::TableNextColumn();
+                ImGui::TableNextColumn();
                 ImGui::EndTable();
             }
             ImGui::PopStyleVar();
 
-            ImGui::Spacing();
-            if (AnimatedCheckbox("Encrypt function", &state.packFunctions)) {
-                if (!state.packFunctions) {
-                    state.fpackStart.fill(0);
-                    state.fpackEnd.fill(0);
+            if (state.packFunctions) {
+                BeginPanelContent();
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 2.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 0.0f));
+                if (ImGui::BeginTable(
+                        "FpackFields",
+                        4,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX | ImGuiTableFlags_NoPadOuterX,
+                        ImVec2(content_w, 0.0f))) {
+                    ImGui::TableSetupColumn("start_label", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+                    ImGui::TableSetupColumn("start_field", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("end_label", ImGuiTableColumnFlags_WidthFixed, 26.0f);
+                    ImGui::TableSetupColumn("end_field", ImGuiTableColumnFlags_WidthStretch);
+
+                    ImGui::TableNextRow(0, option_row_h);
+                    ImGui::TableNextColumn();
+                    VCenterInRow(option_row_h);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("Start");
+                    ImGui::TableNextColumn();
+                    VCenterInRow(option_row_h);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::InputText("##fpack_start", state.fpackStart.data(), state.fpackStart.size());
+                    ImGui::TableNextColumn();
+                    VCenterInRow(option_row_h);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("End");
+                    ImGui::TableNextColumn();
+                    VCenterInRow(option_row_h);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::InputText("##fpack_end", state.fpackEnd.data(), state.fpackEnd.size());
+
+                    ImGui::EndTable();
                 }
+                ImGui::PopStyleVar(2);
             }
 
-            if (state.packFunctions) {
-                ImGui::Indent();
-                ImGui::InputText("Start address", state.fpackStart.data(), state.fpackStart.size());
-                ImGui::InputText("End address", state.fpackEnd.data(), state.fpackEnd.size());
-                ImGui::Unindent();
-            }
-            ImGui::Unindent(4.0f);
         }
         ImGui::EndChild();
 
         ImGui::SameLine();
 
-        if (ImGui::BeginChild("FileInfoColumn", ImVec2(rightColumnWidth, middleSectionHeight), false, 0)) {
-            // rounded border
-            const float panelRounding = 16.0f;
-            const ImVec4 borderCol = ImVec4(0.29f, 0.47f, 0.83f, 0.32f);
-            ImDrawList* colDraw = ImGui::GetWindowDrawList();
-            ImVec2 colMin = ImGui::GetWindowPos();
-            ImVec2 colMax = ImVec2(colMin.x + ImGui::GetWindowSize().x, colMin.y + ImGui::GetWindowSize().y);
-            colDraw->AddRect(colMin, colMax, ImGui::ColorConvertFloat4ToU32(borderCol), panelRounding, 0, 1.0f);
+        if (ImGui::BeginChild("FileInfoColumn", ImVec2(rightColumnWidth, middleSectionHeight), false, kPanelChildFlags)) {
+            const float panel_w = ImGui::GetWindowSize().x;
+            const ImVec2 col_min = ImGui::GetWindowPos();
+            const ImVec2 col_max(col_min.x + panel_w, col_min.y + ImGui::GetWindowSize().y);
+            DrawPanelBorder(ImGui::GetWindowDrawList(), col_min, col_max, 12.0f);
+            DrawPanelTitle("File Information", col_min, panel_w);
+            BeginPanelContent();
 
-            // header
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
-            const char* fileInfoTitle = "File Information";
-            float fileInfoTextWidth = ImGui::CalcTextSize(fileInfoTitle).x;
-            float fileInfoAvailableWidth = ImGui::GetContentRegionAvail().x;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (fileInfoAvailableWidth - fileInfoTextWidth) * 0.5f);
-            const ImVec2 titleScreenPos = ImGui::GetCursorScreenPos();
-            const ImVec2 titleSize = ImGui::CalcTextSize(fileInfoTitle);
-            const float textShiftY = -6.0f;
-            const ImVec2 shiftedTitlePos(titleScreenPos.x, titleScreenPos.y + textShiftY);
-            const ImU32 childBg = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
-            const float coverPadX = 14.0f;
-            const float coverTop = shiftedTitlePos.y - 2.0f;
-            const float coverBottom = shiftedTitlePos.y + titleSize.y + 4.0f;
-            colDraw->AddRectFilled(
-                ImVec2(shiftedTitlePos.x - coverPadX, coverTop),
-                ImVec2(shiftedTitlePos.x + titleSize.x + coverPadX, coverBottom),
-                childBg,
-                0.0f);
-            ImGui::GetForegroundDrawList()->AddText(
-                shiftedTitlePos,
-                ImGui::GetColorU32(ImVec4(0.82f, 0.88f, 0.95f, 1.0f)),
-                fileInfoTitle);
-            ImGui::Dummy(ImVec2(0.0f, titleSize.y));
-            ImGui::PopStyleColor();
+            const float info_w = PanelContentWidth();
+            const float info_row_h = ImGui::GetFrameHeight();
 
             if (state.fileInfo.isValid) {
-                
-                ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 3.f));
-                if (ImGui::BeginTable("FileInfo", 2, ImGuiTableFlags_SizingStretchProp)) {
-                    auto centerInColumn = [](const char* text) {
-                        // center the next text within the current table column
-                        const float colW = ImGui::GetColumnWidth();
-                        const float textW = ImGui::CalcTextSize(text).x;
-                        const float cursorX = ImGui::GetCursorPosX();
-                        ImGui::SetCursorPosX(cursorX + (colW - textW) * 0.5f);
-                    };
-
-                    // left column
-                    ImGui::TableNextColumn();
-                    centerInColumn("File:");
-                    ImGui::TextDisabled("File:");
-                    centerInColumn(state.fileInfo.filePath.c_str());
-                    ImGui::Text("%s", state.fileInfo.filePath.c_str());
-                    
-                    centerInColumn("Architecture:");
-                    ImGui::TextDisabled("Architecture:");
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.82f, 0.53f, 1.0f));
-                    centerInColumn(state.fileInfo.architecture.c_str());
-                    ImGui::Text("%s", state.fileInfo.architecture.c_str());
-                    ImGui::PopStyleColor();
-                    
-                    centerInColumn("Entry Point:");
-                    ImGui::TextDisabled("Entry Point:");
-                    centerInColumn(state.fileInfo.entryPoint.c_str());
-                    ImGui::Text("%s", state.fileInfo.entryPoint.c_str());
-
-                    // right column
-                    ImGui::TableNextColumn();
-                    centerInColumn("Image Base:");
-                    ImGui::TextDisabled("Image Base:");
-                    centerInColumn(state.fileInfo.imageBase.c_str());
-                    ImGui::Text("%s", state.fileInfo.imageBase.c_str());
-                    
-                    centerInColumn("Image Size:");
-                    ImGui::TextDisabled("Image Size:");
-                    centerInColumn(state.fileInfo.imageSize.c_str());
-                    ImGui::Text("%s", state.fileInfo.imageSize.c_str());
-                    
-                    centerInColumn("Sections:");
-                    ImGui::TextDisabled("Sections:");
-                    centerInColumn(state.fileInfo.sectionCount.c_str());
-                    ImGui::Text("%s", state.fileInfo.sectionCount.c_str());
-
-                    ImGui::EndTable();
-                }
-                ImGui::PopStyleVar();
+                RenderFileInfoList(state.fileInfo, info_w, info_row_h);
             } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 const char* noFileText = "No file loaded";
-                float textWidth = ImGui::CalcTextSize(noFileText).x;
-                float availWidth = ImGui::GetContentRegionAvail().x;
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availWidth - textWidth) * 0.5f);
+                const float text_w = ImGui::CalcTextSize(noFileText).x;
+                ImGui::SetCursorPosX(kPanelPad + (info_w - text_w) * 0.5f);
                 ImGui::TextDisabled("%s", noFileText);
-                ImGui::PopStyleColor();
-            }
-            
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-            
-            // actions block
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.0f));
-            float actionsTextWidth = ImGui::CalcTextSize("Actions").x;
-            float actionsAvailableWidth = ImGui::GetContentRegionAvail().x;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (actionsAvailableWidth - actionsTextWidth) * 0.5f);
-            ImGui::Text("Actions");
-            ImGui::PopStyleColor();
-            
-            ImGui::Spacing();
-            
-            const float buttonWidth = 120.0f;
-            float availableWidth = ImGui::GetContentRegionAvail().x;
-            float totalButtonsWidth = buttonWidth;
-            float offset = (availableWidth - totalButtonsWidth) * 0.5f;
-            if (offset < 0.0f) {
-                offset = 0.0f;
-            }
-            float startX = ImGui::GetCursorPosX() + offset;
-            ImGui::SetCursorPosX(startX);
-           
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 6.0f);
-            
-            if (GradientButton(
-                    "Pack",
-                    ImVec2(buttonWidth, 0.0f),
-                    ImVec4(0.10f, 0.18f, 0.40f, 1.0f),
-                    ImVec4(0.14f, 0.26f, 0.56f, 1.0f),
-                    ImVec4(0.20f, 0.38f, 0.78f, 1.0f),
-                    ImVec4(0.32f, 0.56f, 0.96f, 1.0f))) {
-                lastSuccess = ExecutePacking(state, statusMessage);
             }
 
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -1033,39 +1292,39 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float availHeight = avail.y;
         ImVec2 max = ImVec2(min.x + avail.x, min.y + availHeight);
-        ImVec4 headerColor = ImVec4(0.16f, 0.18f, 0.22f, 0.95f);
-        const float logsRounding = 16.0f;
+        ImVec4 headerColor = kClrPanel;
+        const float logsRounding = 12.0f;
         drawList->AddRectFilled(min, max, ImGui::ColorConvertFloat4ToU32(headerColor), logsRounding);
         // panel border
         drawList->AddRect(
             min,
             max,
-            ImGui::ColorConvertFloat4ToU32(ImVec4(0.29f, 0.47f, 0.83f, 0.32f)),
+            ImGui::ColorConvertFloat4ToU32(kClrBorderSubtle),
             logsRounding,
             0,
             1.0f);
         ImGui::Dummy(ImVec2(0.0f, 6.0f));
         const char* activityHeader = "Activity";
-        float activityTextWidth = ImGui::CalcTextSize(activityHeader).x;
-        float activityTextX = min.x + (avail.x - activityTextWidth) * 0.5f;
-        ImGui::SetCursorScreenPos(ImVec2(activityTextX, min.y + 8.0f));
+        const float activityTextWidth = ImGui::CalcTextSize(activityHeader).x;
+        const float activityTextX = min.x + (avail.x - activityTextWidth) * 0.5f;
+        ImGui::SetCursorScreenPos(ImVec2(activityTextX, min.y + 10.0f));
         ImGui::TextDisabled("%s", activityHeader);
         
-        // calculate proper size for child window
-        float childStartY = min.y + 28.0f;
-        float childHeight = availHeight - (childStartY - min.y) - 8.0f; // 8px padding at bottom
-        float childWidth = avail.x - 16.0f; // 8px padding on each side
+        const float logPadX = 12.0f;
+        const float childStartY = min.y + 30.0f;
+        const float childHeight = availHeight - (childStartY - min.y) - 10.0f;
+        const float childWidth = avail.x - logPadX * 2.0f;
         
-        ImGui::SetCursorScreenPos(ImVec2(min.x + 8.0f, childStartY));
+        ImGui::SetCursorScreenPos(ImVec2(min.x + logPadX, childStartY));
 
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
 		// scrollbar styling
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 7.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, 18.0f);
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.32f, 0.38f, 0.46f, 0.55f));
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.38f, 0.46f, 0.56f, 0.75f));
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, ImVec4(0.45f, 0.62f, 0.95f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, kClrScrollbarGrab);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, kClrScrollbarGrabHovered);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, ImVec4(kClrAccent.x, kClrAccent.y, kClrAccent.z, 0.85f));
         if (ImGui::BeginChild("log_region", ImVec2(childWidth, childHeight), false, ImGuiWindowFlags_NoBackground)) {
             if (state.logEntries.empty()) {
                 ImGui::TextDisabled("Logs will appear here.");
@@ -1093,7 +1352,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
                         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + yOffset);
                     }
 
-                    ImVec4 color = entry.second ? ImVec4(0.45f, 0.82f, 0.53f, 1.0f) : ImVec4(0.91f, 0.48f, 0.40f, 1.0f);
+                    ImVec4 color = entry.second ? kClrLogOk : kClrLogErr;
                     color.w *= animProgress;
                     ImGui::PushStyleColor(ImGuiCol_Text, color);
                     ImGui::TextWrapped("%s", entry.first.c_str());
@@ -1515,44 +1774,77 @@ void ApplyBorderlessWindow(HWND hwnd, int width, int height) {
 
 // Some styles xD
 void ApplyCustomTheme(ImGuiStyle& style) {
-    style.WindowPadding = ImVec2(20.0f, 16.0f);
-    style.FramePadding = ImVec2(12.0f, 6.0f);
-    style.ItemSpacing = ImVec2(10.0f, 8.0f);
-    style.WindowRounding = 20.0f;
-    style.FrameRounding = 10.0f;
-    style.ScrollbarRounding = 12.0f;
-    style.GrabRounding = 10.0f;
-    style.GrabMinSize = 12.0f;
+    style.WindowPadding = ImVec2(16.0f, 12.0f);
+    style.FramePadding = ImVec2(9.0f, 4.0f);
+    style.ItemSpacing = ImVec2(8.0f, 7.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+    style.CellPadding = ImVec2(6.0f, 4.0f);
+    style.WindowRounding = 16.0f;
+    style.FrameRounding = 8.0f;
+    style.ScrollbarRounding = 10.0f;
+    style.GrabRounding = 8.0f;
+    style.GrabMinSize = 10.0f;
     style.WindowBorderSize = 0.0f;
     style.FrameBorderSize = 0.0f;
     style.ChildBorderSize = 0.0f;
 
-    ImVec4 bg = ImVec4(0.11f, 0.13f, 0.17f, 1.0f);
-    ImVec4 panel = ImVec4(0.16f, 0.18f, 0.24f, 1.0f);
-    ImVec4 accent = ImVec4(0.29f, 0.47f, 0.83f, 1.0f);
-    ImVec4 accentHover = ImVec4(0.36f, 0.55f, 0.91f, 1.0f);
-    ImVec4 accentActive = ImVec4(0.24f, 0.40f, 0.75f, 1.0f);
+    ImVec4 bg = kClrBg;
+    ImVec4 panel = kClrPanel;
+    ImVec4 accent = kClrAccent;
+    ImVec4 accentHover = kClrAccentHover;
+    ImVec4 accentActive = kClrAccentActive;
 
     style.Colors[ImGuiCol_WindowBg] = bg;
-    style.Colors[ImGuiCol_ChildBg] = ImVec4(bg.x + 0.01f, bg.y + 0.01f, bg.z + 0.02f, 1.0f);
+    style.Colors[ImGuiCol_ChildBg] = panel;
     style.Colors[ImGuiCol_PopupBg] = panel;
     
-    ImVec4 sliderTrack = ImVec4(0.20f, 0.22f, 0.28f, 1.0f);
+    ImVec4 sliderTrack = kClrSurface;
     style.Colors[ImGuiCol_FrameBg] = sliderTrack;
-    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.24f, 0.26f, 0.32f, 1.0f);
-    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.30f, 0.36f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = kClrSurfaceHi;
+    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(kClrSurfaceHi.x + 0.02f, kClrSurfaceHi.y + 0.02f, kClrSurfaceHi.z + 0.02f, 1.0f);
 
     style.Colors[ImGuiCol_SliderGrab] = accent;
-    style.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.45f, 0.62f, 0.95f, 1.0f);
-    
-    style.Colors[ImGuiCol_Button] = accent;
-    style.Colors[ImGuiCol_ButtonHovered] = accentHover;
-    style.Colors[ImGuiCol_ButtonActive] = accentActive;
-    style.Colors[ImGuiCol_Header] = accent;
-    style.Colors[ImGuiCol_HeaderHovered] = accentHover;
-    style.Colors[ImGuiCol_HeaderActive] = accentActive;
-    style.Colors[ImGuiCol_CheckMark] = ImVec4(0.92f, 0.95f, 0.98f, 1.0f);
-    style.Colors[ImGuiCol_Separator] = ImVec4(0.25f, 0.27f, 0.32f, 1.0f);
-    style.Colors[ImGuiCol_Text] = ImVec4(0.90f, 0.94f, 0.98f, 1.0f);
-    style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.64f, 0.70f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrabActive] = accentHover;
+
+    style.Colors[ImGuiCol_Button] = kClrSurface;
+    style.Colors[ImGuiCol_ButtonHovered] = kClrSurfaceHi;
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(kClrSurfaceHi.x + 0.02f, kClrSurfaceHi.y + 0.02f, kClrSurfaceHi.z + 0.02f, 1.0f);
+    style.Colors[ImGuiCol_Header] = ImVec4(accent.x, accent.y, accent.z, 0.25f);
+    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(accent.x, accent.y, accent.z, 0.38f);
+    style.Colors[ImGuiCol_HeaderActive] = ImVec4(accent.x, accent.y, accent.z, 0.50f);
+    style.Colors[ImGuiCol_CheckMark] = kClrCheckMark;
+    style.Colors[ImGuiCol_Separator] = kClrSeparator;
+    style.Colors[ImGuiCol_ScrollbarGrab] = kClrScrollbarGrab;
+    style.Colors[ImGuiCol_ScrollbarGrabHovered] = kClrScrollbarGrabHovered;
+    style.Colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(kClrAccent.x, kClrAccent.y, kClrAccent.z, 0.85f);
+    style.Colors[ImGuiCol_Text] = kClrText;
+    style.Colors[ImGuiCol_TextDisabled] = kClrTextDim;
+    style.Colors[ImGuiCol_Border] = kClrBorderSubtle;
+    style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
+void LoadUiFonts(ImGuiIO& io) {
+    char win_dir[MAX_PATH]{};
+    if (GetWindowsDirectoryA(win_dir, MAX_PATH) == 0) {
+        io.Fonts->AddFontDefault();
+        return;
+    }
+
+    const std::filesystem::path font_path = std::filesystem::path(win_dir) / "Fonts" / "segoeui.ttf";
+    std::error_code ec;
+    if (!std::filesystem::exists(font_path, ec)) {
+        io.Fonts->AddFontDefault();
+        return;
+    }
+
+    static const ImWchar ranges[] = {
+        0x0020, 0x00FF,
+        0x0400, 0x052F,
+        0,
+    };
+
+    if (io.Fonts->AddFontFromFileTTF(font_path.string().c_str(), kUIFontSize, nullptr, ranges) == nullptr) {
+        io.Fonts->AddFontDefault();
+        io.FontGlobalScale = kUIFontSize / 13.0f;
+    }
 }
