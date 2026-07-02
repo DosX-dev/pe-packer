@@ -89,6 +89,8 @@ public:
     std::string m_output;
 
 private:
+    void emit_mba_block();
+
     std::unique_ptr<stub_emit::c_stub_emitter> m_emitter;
     pe_raw::PeView                             m_peView;
 };

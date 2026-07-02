@@ -52,7 +52,7 @@ pe-packer.exe input.exe output.exe 4 -fpack 0x401040 0x401072
 > `-fpack` takes two additional arguments: start and end address of the function range.
 
 ## GUI Interface
-<img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/b73db14d-1022-4492-8613-886437d594d9" />
+<img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/5737a068-e21f-41c7-b93e-b640283133c8" />
 
 ### Obfuscation level mapping
 The GUI slider is `1..100` and is mapped to **level 1..10**:

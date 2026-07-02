@@ -59,6 +59,7 @@ namespace stub_emit {
         void and_(Reg dst, Reg src);
         void and_(Reg dst, std::uint32_t imm);
         void or_(Reg dst, Reg src);
+        void not_(Reg);
 
         void cmp(Reg dst, Reg src);
         void cmp(Reg dst, std::uint32_t imm);
@@ -84,6 +85,7 @@ namespace stub_emit {
         void call(Label label);
         void call(Reg dst);
         void call_rva(std::uint32_t oep_rva);
+        void ret();
         void load_image_base(Reg dst);
 
     private:

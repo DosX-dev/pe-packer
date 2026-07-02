@@ -182,11 +182,33 @@ void c_core::process()
     emitter.push(regs.base_ptr);
     emitter.mov(regs.base_ptr, regs.stack_ptr);
 
+    // need to restore it after obfuscation
+    const stub_emit::Reg save_rsi(stub_emit::Reg(6));
+    const stub_emit::Reg save_rdi(stub_emit::Reg(7));
+    emitter.push(regs.base);
+    emitter.push(regs.counter);
+    emitter.push(regs.temp2);
+    emitter.push(save_rsi);
+    emitter.push(save_rdi);
+
     std::uint64_t oep = m_peView.entry_point_rva;
     const std::uint32_t oepvl_xor_key = (uint32_t)random_xor_key();
 
     c_adasm adasm_obj(*this);
+
+    if (obf_mba) {
+        for (std::uint32_t i = 0; i < m_profile.mba_entry_passes; ++i) {
+            emit_mba_block();
+        }
+    }
+
     obfuscation_process();
+
+    if (obf_mba) {
+        for (std::uint32_t i = 0; i < m_profile.mba_exit_passes; ++i) {
+            emit_mba_block();
+        }
+    }
 
     if (obf_func_pack) {
         pe_raw::set_section_characteristics(
@@ -205,6 +227,12 @@ void c_core::process()
     if (obf_anti_disasm) {
         adasm_obj.jmp_label_skip();
     }
+
+    emitter.pop(save_rdi);
+    emitter.pop(save_rsi);
+    emitter.pop(regs.temp2);
+    emitter.pop(regs.counter);
+    emitter.pop(regs.base);
 
     if (obf_call_oep) {
         const arch_utils::oep_scratch_regs scratch = arch_utils::get_oep_scratch_regs(is_x64());
@@ -375,6 +403,11 @@ void c_core::call_obfuscation()
 
 void c_core::generate_junk_code()
 {
+    if (obf_mba && static_cast<std::uint32_t>(rand() % 100) < m_profile.mba_junk_weight_percent) {
+        emit_mba_block();
+        return;
+    }
+
     switch (rand() % 3) {
     case 0: push_pop_junk(); break;
     case 1: big_conditions_junk(); break;
@@ -510,16 +543,24 @@ int c_core::random_in_profile_range(int min_value, int max_value) const
     return random_value(min_value, max_value);
 }
 
-void c_core::obfuscation_process()
+void c_core::emit_mba_block()
 {
     c_mba mba_obj(*this);
+    c_mba::options mba_opt{};
+    mba_opt.mba_factor = static_cast<int>(m_profile.mba_inner_ops);
+    mba_obj.mba_code(mba_opt);
+}
+
+void c_core::obfuscation_process()
+{
     c_adasm adasm_obj(*this);
 
     print_info(
-        "Advanced values: %u passes, MBA weight %u%%, call depth %u\n",
+        "Advanced values: level %u, passes %u, MBA weight %u%%, entry MBA %u, call depth %u\n",
         m_profile.level,
         m_profile.obfuscation_passes,
         m_profile.mba_weight_percent,
+        m_profile.mba_entry_passes,
         m_profile.call_depth
     );
 
@@ -530,9 +571,7 @@ void c_core::obfuscation_process()
 
         const int roll = rand() % 100;
         if (obf_mba && static_cast<std::uint32_t>(roll) < m_profile.mba_weight_percent) {
-            c_mba::options mba_opt{};
-            mba_opt.mba_factor = static_cast<int>(m_profile.mba_inner_ops);
-            mba_obj.mba_code(mba_opt);
+            emit_mba_block();
         }
         else {
             switch (rand() % 2) {
