@@ -26,6 +26,9 @@ namespace mutation_profile {
         std::uint32_t condition_actions_min{ 0 };
         std::uint32_t condition_actions_max{ 0 };
         std::uint32_t mba_weight_percent{ 0 };
+        std::uint32_t mba_junk_weight_percent{ 0 };
+        std::uint32_t mba_entry_passes{ 0 };
+        std::uint32_t mba_exit_passes{ 0 };
         std::uint32_t mba_inner_ops{ 0 };
         std::uint32_t fake_instr_min{ 0 };
         std::uint32_t fake_instr_max{ 0 };
@@ -60,7 +63,10 @@ namespace mutation_profile {
         profile.push_pop_rounds = lerp_u32(1, 8, level);
         profile.condition_actions_min = lerp_u32(2, 15, level);
         profile.condition_actions_max = lerp_u32(5, 80, level);
-        profile.mba_weight_percent = lerp_u32(10, 50, level);
+        profile.mba_weight_percent = lerp_u32(25, 85, level);
+        profile.mba_junk_weight_percent = lerp_u32(35, 75, level);
+        profile.mba_entry_passes = lerp_u32(2, 14, level);
+        profile.mba_exit_passes = lerp_u32(1, 8, level);
         profile.mba_inner_ops = lerp_u32(2, 15, level);
         profile.fake_instr_min = 1;
         profile.fake_instr_max = lerp_u32(16, 128, level);

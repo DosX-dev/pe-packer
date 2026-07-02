@@ -230,6 +230,15 @@ namespace stub_emit {
         }
     }
 
+	void c_stub_emitter::not_(Reg dst) {
+        if (is64_) {
+            x64_.not_reg(dst, full_width);
+        }
+        else {
+            x86_.not_reg(dst, full_width);
+        }
+    }
+
     void c_stub_emitter::inc(Reg dst) {
         if (is64_) {
             x64_.inc_reg(dst, full_width);
@@ -406,6 +415,15 @@ namespace stub_emit {
         }
         else {
             x86_.call_rel32(rel32);
+        }
+    }
+
+    void c_stub_emitter::ret() {
+        if (is64_) {
+            x64_.ret();
+        }
+        else {
+            x86_.ret();
         }
     }
 
