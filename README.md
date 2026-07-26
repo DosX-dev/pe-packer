@@ -69,7 +69,7 @@ The GUI slider is `1..100` and is mapped to **level 1..10**:
 ![Pasted image 20250701214338](https://github.com/user-attachments/assets/5145b480-4555-460c-ada2-bd2a56bec2b3)
 
 ## Output
-<img width="655" height="390" alt="image" src="https://github.com/user-attachments/assets/7ca56910-4837-4cf2-a8ca-1a7bd0432f8a" />
+<img width="762" height="641" alt="image" src="https://github.com/user-attachments/assets/ebc61519-524d-45d6-a859-fc54c96a24e6" />
 
 ## CFG / ASLR notes
 
