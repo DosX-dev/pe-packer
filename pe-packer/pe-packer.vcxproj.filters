@@ -10,6 +10,9 @@
     <Filter Include="pe_raw">
       <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678901}</UniqueIdentifier>
     </Filter>
+    <Filter Include="pack">
+      <UniqueIdentifier>{c3d4e5f6-a7b8-9012-cdef-123456789012}</UniqueIdentifier>
+    </Filter>
     <Filter Include="handler">
       <UniqueIdentifier>{03d2aa34-46ff-424a-a359-d31930a3c8ac}</UniqueIdentifier>
     </Filter>
@@ -31,6 +34,9 @@
     <ClCompile Include="core\core.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="core\obfuscation.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="core\adasm.cpp">
       <Filter>core</Filter>
     </ClCompile>
@@ -46,8 +52,14 @@
     <ClCompile Include="emit\x86_emit.cpp">
       <Filter>emit</Filter>
     </ClCompile>
-    <ClCompile Include="pe_raw\pe_io.cpp">
-      <Filter>pe_raw</Filter>
+    <ClCompile Include="pack\stub.cpp">
+      <Filter>pack</Filter>
+    </ClCompile>
+    <ClCompile Include="pack\encrypt.cpp">
+      <Filter>pack</Filter>
+    </ClCompile>
+    <ClCompile Include="pack\pipeline.cpp">
+      <Filter>pack</Filter>
     </ClCompile>
     <ClCompile Include="pe_raw\pe_view.cpp">
       <Filter>pe_raw</Filter>
@@ -108,10 +120,22 @@
     <ClInclude Include="emit\emit_error.hpp">
       <Filter>emit</Filter>
     </ClInclude>
-    <ClInclude Include="pe_raw\pe_view.hpp">
-      <Filter>pe_raw</Filter>
+    <ClInclude Include="pack\pack.hpp">
+      <Filter>pack</Filter>
     </ClInclude>
-    <ClInclude Include="pe_raw\pe_io.hpp">
+    <ClInclude Include="pack\types.hpp">
+      <Filter>pack</Filter>
+    </ClInclude>
+    <ClInclude Include="pack\stub.hpp">
+      <Filter>pack</Filter>
+    </ClInclude>
+    <ClInclude Include="pack\encrypt.hpp">
+      <Filter>pack</Filter>
+    </ClInclude>
+    <ClInclude Include="pack\pipeline.hpp">
+      <Filter>pack</Filter>
+    </ClInclude>
+    <ClInclude Include="pe_raw\pe_view.hpp">
       <Filter>pe_raw</Filter>
     </ClInclude>
     <ClInclude Include="pe_raw\pe_error.hpp">

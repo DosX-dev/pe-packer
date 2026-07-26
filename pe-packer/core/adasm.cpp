@@ -17,7 +17,7 @@ void c_adasm::jmp_label_skip() {
             static_cast<int>(m_core.obfuscation_profile().adasm_junk_max)
         );
         for (int i = 0; i < junk_count; ++i) {
-            emitter.db(static_cast<std::uint8_t>(random_value(0x10, 0xFF)));
+            emitter.db(static_cast<std::uint8_t>(random_value(0x00, 0xFF)));
         }
     }
 

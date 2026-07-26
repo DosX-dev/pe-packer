@@ -68,25 +68,23 @@ namespace arch_utils {
 
 
     inline stub_emit::Reg get_random_gp_reg(bool is64bit) {
-
-        const int reg_num = rand() % 6;
-
         if (is64bit) {
-
-            switch (reg_num) {
+            switch (rand() % 10) {
             case 0: return stub_emit::Reg(emit::rx::rax);
             case 1: return stub_emit::Reg(emit::rx::rbx);
             case 2: return stub_emit::Reg(emit::rx::rcx);
             case 3: return stub_emit::Reg(emit::rx::rdx);
             case 4: return stub_emit::Reg(emit::rx::rsi);
             case 5: return stub_emit::Reg(emit::rx::rdi);
+            case 6: return stub_emit::Reg(emit::rx::r8);
+            case 7: return stub_emit::Reg(emit::rx::r9);
+            case 8: return stub_emit::Reg(emit::rx::r10);
+            case 9: return stub_emit::Reg(emit::rx::r11);
             default: return stub_emit::Reg(emit::rx::rax);
-
             }
-
         }
 
-        switch (reg_num) {
+        switch (rand() % 6) {
         case 0: return stub_emit::Reg(emit::rx::rax);
         case 1: return stub_emit::Reg(emit::rx::rbx);
         case 2: return stub_emit::Reg(emit::rx::rcx);
@@ -95,25 +93,21 @@ namespace arch_utils {
         case 5: return stub_emit::Reg(emit::rx::rdi);
         default: return stub_emit::Reg(emit::rx::rax);
         }
-
     }
 
-    inline stub_emit::Reg get_random_lower_reg(bool /*is64bit*/) {
-        return get_random_gp_reg(true);
+    inline stub_emit::Reg get_random_lower_reg(bool is64bit) {
+        return get_random_gp_reg(is64bit);
     }
 
+    // Only keep stack/frame intact
     inline bool reg_conflicts(stub_emit::Reg reg, const arch_regs& regs) {
-        return reg == regs.base_ptr ||
-            reg == regs.stack_ptr ||
-            reg == regs.base ||
-            reg == regs.counter ||
-            reg == regs.temp1 ||
-            reg == regs.temp2;
+        return reg == regs.base_ptr || reg == regs.stack_ptr;
     }
 
     inline stub_emit::Reg pick_random_reg(const arch_regs& regs, bool is64bit, stub_emit::Reg exclude = stub_emit::Reg(0xFF)) {
         stub_emit::Reg reg = get_random_gp_reg(is64bit);
-        while (reg_conflicts(reg, regs) || reg == exclude) {
+        int guard = 0;
+        while ((reg_conflicts(reg, regs) || reg == exclude) && guard++ < 32) {
             reg = get_random_gp_reg(is64bit);
         }
         return reg;
