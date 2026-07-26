@@ -121,8 +121,8 @@ struct GuiState {
     // display buffers: show only filename until the user focuses the field
     std::array<char, MAX_PATH> inputDisplay{};
     std::array<char, MAX_PATH> outputDisplay{};
-    std::array<char, 32> fpackStart{};
-    std::array<char, 32> fpackEnd{};
+    std::array<char, 48> fpackStart{};
+    std::array<char, 48> fpackEnd{};
     int mutationBase = 1;
     bool removeAslr = false;
     bool obfuscateOep = false;
@@ -912,7 +912,7 @@ void RenderGui(GuiState& state, std::string& statusMessage, bool& lastSuccess) {
         const ImVec2 titleTextMax = ImGui::GetItemRectMax();
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::TextDisabled("|  Version 1.0.4");
+        ImGui::TextDisabled("|  Version 1.0.5");
         const ImVec2 versionTextMin = ImGui::GetItemRectMin();
         const ImVec2 versionTextMax = ImGui::GetItemRectMax();
         

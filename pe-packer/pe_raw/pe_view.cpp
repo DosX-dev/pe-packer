@@ -154,14 +154,14 @@ namespace pe_raw {
         return view;
     }
 
-        bool is_io_pe_error(const char* msg) {
-            if (!msg) {
-                return false;
-            }
-            const std::string_view text(msg);
-            return text.find("cannot open file") != std::string_view::npos
-                || text.find("read failed") != std::string_view::npos;
+    bool is_io_pe_error(const char* msg) {
+        if (!msg) {
+            return false;
         }
+        const std::string_view text(msg);
+        return text.find("cannot open file") != std::string_view::npos
+            || text.find("read failed") != std::string_view::npos;
+    }
 
     ParseFileResult parse_pe_file(const std::string& path) {
         ParseFileResult result;
@@ -471,168 +471,189 @@ namespace pe_raw {
         view.dll_characteristics = characteristics;
     }
 
-    // spcial for -noaslr
+    // special for -noaslr / -senc
     void clear_aslr(PeView& view) {
-        set_dll_characteristics(view, static_cast<std::uint16_t>(view.dll_characteristics & ~IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE));
+        const std::uint16_t drop =
+            IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE |
+            IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA;
+        set_dll_characteristics(
+            view,
+            static_cast<std::uint16_t>(view.dll_characteristics & ~drop)
+        );
+    }
+
+    void clear_basereloc_directory(PeView& view) {
+        if (view.is64) {
+            auto* optional = reinterpret_cast<IMAGE_OPTIONAL_HEADER64*>(view.bytes.data() + view.opt_hdr_off);
+            optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress = 0;
+            optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = 0;
+        }
+        else {
+            auto* optional = reinterpret_cast<IMAGE_OPTIONAL_HEADER32*>(view.bytes.data() + view.opt_hdr_off);
+            optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress = 0;
+            optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = 0;
+        }
+        view.old_reloc_rva = 0;
+        view.old_reloc_size = 0;
     }
 
 
-        std::uint32_t load_config_rva(const PeView& view) {
-            if (view.is64) {
-                const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER64*>(view.bytes.data() + view.opt_hdr_off);
-                return optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress;
-            }
-
-            const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER32*>(view.bytes.data() + view.opt_hdr_off);
+    std::uint32_t load_config_rva(const PeView& view) {
+        if (view.is64) {
+            const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER64*>(view.bytes.data() + view.opt_hdr_off);
             return optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress;
         }
 
-        std::uint32_t load_config_size(const PeView& view) {
-            if (view.is64) {
-                const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER64*>(view.bytes.data() + view.opt_hdr_off);
-                return optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].Size;
-            }
+        const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER32*>(view.bytes.data() + view.opt_hdr_off);
+        return optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress;
+    }
 
-            const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER32*>(view.bytes.data() + view.opt_hdr_off);
+    std::uint32_t load_config_size(const PeView& view) {
+        if (view.is64) {
+            const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER64*>(view.bytes.data() + view.opt_hdr_off);
             return optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].Size;
         }
 
-        std::uint32_t read_u32(const std::uint8_t* data, std::size_t offset) {
-            std::uint32_t value = 0;
-            std::memcpy(&value, data + offset, sizeof(value));
-            return value;
-        }
+        const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER32*>(view.bytes.data() + view.opt_hdr_off);
+        return optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].Size;
+    }
 
-        std::uint64_t read_u64(const std::uint8_t* data, std::size_t offset) {
-            std::uint64_t value = 0;
-            std::memcpy(&value, data + offset, sizeof(value));
-            return value;
-        }
+    std::uint32_t read_u32(const std::uint8_t* data, std::size_t offset) {
+        std::uint32_t value = 0;
+        std::memcpy(&value, data + offset, sizeof(value));
+        return value;
+    }
 
-        void write_u32(std::uint8_t* data, std::size_t offset, std::uint32_t value) {
-            std::memcpy(data + offset, &value, sizeof(value));
-        }
+    std::uint64_t read_u64(const std::uint8_t* data, std::size_t offset) {
+        std::uint64_t value = 0;
+        std::memcpy(&value, data + offset, sizeof(value));
+        return value;
+    }
 
-        std::uint32_t guard_cf_entry_stride(std::uint32_t guard_flags) {
-            return 4u + ((guard_flags & 0xF0000000u) >> 28);
-        }
+    void write_u32(std::uint8_t* data, std::size_t offset, std::uint32_t value) {
+        std::memcpy(data + offset, &value, sizeof(value));
+    }
 
-        std::uint32_t guard_cf_flags_offset(bool is64, std::uint32_t config_size) {
-            /*
-            * IMAGE_LOAD_CONFIG_DIRECTORY64
-            * ref: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_load_config_directory64
-            */
-            if (is64) {
-                if (config_size >= 0x94u) {
-                    return 0x90u;
-                }
-                if (config_size >= 0x90u) {
-                    return 0x8Cu; // GuardFlags
-                }
-                return 0;
+    std::uint32_t guard_cf_entry_stride(std::uint32_t guard_flags) {
+        return 4u + ((guard_flags & 0xF0000000u) >> 28);
+    }
+
+    std::uint32_t guard_cf_flags_offset(bool is64, std::uint32_t config_size) {
+        /*
+        * IMAGE_LOAD_CONFIG_DIRECTORY64
+        * ref: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_load_config_directory64
+        */
+        if (is64) {
+            if (config_size >= 0x94u) {
+                return 0x90u;
             }
-
-            /*
-            * IMAGE_LOAD_CONFIG_DIRECTORY32 
-            * ref: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_load_config_directory32
-            */
-            
-            if (config_size >= 0x5Cu) {
-                return 0x58u;
+            if (config_size >= 0x90u) {
+                return 0x8Cu; // GuardFlags
             }
             return 0;
         }
 
-        struct GuardCfDirectoryLayout {
-            std::uint32_t min_directory_size;
-            std::uint32_t min_declared_size;
-            std::uint32_t table_va_offset;
-            std::uint32_t count_offset;
-        };
+        /*
+        * IMAGE_LOAD_CONFIG_DIRECTORY32
+        * ref: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_load_config_directory32
+        */
 
-        GuardCfDirectoryLayout guard_cf_layout(bool is64) {
-            if (is64) {
-                return { 0x8Cu, 0x8Cu, 0x80u, 0x88u };
-            }
-            return { 0x58u, 0x58u, 0x50u, 0x54u };
+        if (config_size >= 0x5Cu) {
+            return 0x58u;
         }
+        return 0;
+    }
 
-        std::uint32_t load_config_bytes_available(PeView& view, std::uint32_t config_rva) {
-            const auto* section = section_for_rva(view, config_rva);
-            if (!section) {
-                return 0;
-            }
+    struct GuardCfDirectoryLayout {
+        std::uint32_t min_directory_size;
+        std::uint32_t min_declared_size;
+        std::uint32_t table_va_offset;
+        std::uint32_t count_offset;
+    };
 
-            const std::uint32_t section_end_rva = section->VirtualAddress +
-                max_u32(section->Misc.VirtualSize, section->SizeOfRawData);
-            if (config_rva >= section_end_rva) {
-                return 0;
-            }
-
-            return section_end_rva - config_rva;
+    GuardCfDirectoryLayout guard_cf_layout(bool is64) {
+        if (is64) {
+            return { 0x8Cu, 0x8Cu, 0x80u, 0x88u };
         }
+        return { 0x58u, 0x58u, 0x50u, 0x54u };
+    }
 
-        std::uint32_t effective_load_config_size(
-            PeView& view,
-            std::uint32_t config_rva,
-            std::uint32_t directory_size,
-            std::uint32_t declared_size
-        ) {
-            std::uint32_t effective = declared_size;
-            if (effective == 0) {
-                effective = directory_size;
-            }
-            if (directory_size > effective) {
-                effective = directory_size;
-            }
-
-            const std::uint32_t section_available = load_config_bytes_available(view, config_rva);
-            if (section_available > 0 && effective > section_available) {
-                effective = section_available;
-            }
-
-            return effective;
-        }
-
-        std::uint64_t read_va(const std::uint8_t* data, std::size_t offset, bool is64) {
-            if (is64) {
-                return read_u64(data, offset);
-            }
-            return read_u32(data, offset);
-        }
-
-        std::uint32_t va_to_rva_from_image_base(std::uint64_t va, const PeView& view) {
-            if (va < view.image_base) {
-                throw PeError("Guard CF pointer is below image base");
-            }
-            return static_cast<std::uint32_t>(va - view.image_base);
-        }
-
-        bool guard_cf_table_is_sorted(
-            const std::uint8_t* table,
-            std::uint32_t count,
-            std::uint32_t stride
-        ) {
-            std::uint32_t previous = 0;
-            for (std::uint32_t i = 0; i < count; ++i) {
-                const std::uint32_t rva = read_u32(table, static_cast<std::size_t>(i) * stride);
-                if (i != 0 && rva < previous) {
-                    return false;
-                }
-                previous = rva;
-            }
-            return true;
-        }
-
-        std::uint32_t detect_guard_cf_stride(const std::uint8_t* table, std::uint32_t count) {
-            for (std::uint32_t extra = 0; extra <= 16u; ++extra) {
-                const std::uint32_t stride = 4u + extra;
-                if (guard_cf_table_is_sorted(table, count, stride)) {
-                    return stride;
-                }
-            }
+    std::uint32_t load_config_bytes_available(PeView& view, std::uint32_t config_rva) {
+        const auto* section = section_for_rva(view, config_rva);
+        if (!section) {
             return 0;
         }
+
+        const std::uint32_t section_end_rva = section->VirtualAddress +
+            max_u32(section->Misc.VirtualSize, section->SizeOfRawData);
+        if (config_rva >= section_end_rva) {
+            return 0;
+        }
+
+        return section_end_rva - config_rva;
+    }
+
+    std::uint32_t effective_load_config_size(
+        PeView& view,
+        std::uint32_t config_rva,
+        std::uint32_t directory_size,
+        std::uint32_t declared_size
+    ) {
+        std::uint32_t effective = declared_size;
+        if (effective == 0) {
+            effective = directory_size;
+        }
+        if (directory_size > effective) {
+            effective = directory_size;
+        }
+
+        const std::uint32_t section_available = load_config_bytes_available(view, config_rva);
+        if (section_available > 0 && effective > section_available) {
+            effective = section_available;
+        }
+
+        return effective;
+    }
+
+    std::uint64_t read_va(const std::uint8_t* data, std::size_t offset, bool is64) {
+        if (is64) {
+            return read_u64(data, offset);
+        }
+        return read_u32(data, offset);
+    }
+
+    std::uint32_t va_to_rva_from_image_base(std::uint64_t va, const PeView& view) {
+        if (va < view.image_base) {
+            throw PeError("Guard CF pointer is below image base");
+        }
+        return static_cast<std::uint32_t>(va - view.image_base);
+    }
+
+    bool guard_cf_table_is_sorted(
+        const std::uint8_t* table,
+        std::uint32_t count,
+        std::uint32_t stride
+    ) {
+        std::uint32_t previous = 0;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const std::uint32_t rva = read_u32(table, static_cast<std::size_t>(i) * stride);
+            if (i != 0 && rva < previous) {
+                return false;
+            }
+            previous = rva;
+        }
+        return true;
+    }
+
+    std::uint32_t detect_guard_cf_stride(const std::uint8_t* table, std::uint32_t count) {
+        for (std::uint32_t extra = 0; extra <= 16u; ++extra) {
+            const std::uint32_t stride = 4u + extra;
+            if (guard_cf_table_is_sorted(table, count, stride)) {
+                return stride;
+            }
+        }
+        return 0;
+    }
 
 
     void add_guard_cf_target(PeView& view, std::uint32_t target_rva) {

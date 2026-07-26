@@ -82,12 +82,15 @@
   <ItemGroup>
     <ClCompile Include="pe-packer.cpp" />
     <ClCompile Include="core\core.cpp" />
+    <ClCompile Include="core\obfuscation.cpp" />
     <ClCompile Include="core\adasm.cpp" />
     <ClCompile Include="core\mba.cpp" />
     <ClCompile Include="emit\stub_emitter.cpp" />
     <ClCompile Include="emit\x64_emit.cpp" />
     <ClCompile Include="emit\x86_emit.cpp" />
-    <ClCompile Include="pe_raw\pe_io.cpp" />
+    <ClCompile Include="pack\stub.cpp" />
+    <ClCompile Include="pack\encrypt.cpp" />
+    <ClCompile Include="pack\pipeline.cpp" />
     <ClCompile Include="pe_raw\pe_view.cpp" />
     <ClCompile Include="utils\arguments.cpp" />
     <ClCompile Include="gui\gui_app.cpp" />
@@ -109,8 +112,12 @@
     <ClInclude Include="emit\x64_emit.h" />
     <ClInclude Include="emit\x86_emit.h" />
     <ClInclude Include="emit\emit_error.hpp" />
+    <ClInclude Include="pack\pack.hpp" />
+    <ClInclude Include="pack\types.hpp" />
+    <ClInclude Include="pack\stub.hpp" />
+    <ClInclude Include="pack\encrypt.hpp" />
+    <ClInclude Include="pack\pipeline.hpp" />
     <ClInclude Include="pe_raw\pe_view.hpp" />
-    <ClInclude Include="pe_raw\pe_io.hpp" />
     <ClInclude Include="pe_raw\pe_error.hpp" />
     <ClInclude Include="handler\handler.hpp" />
     <ClInclude Include="utils\arguments.hpp" />

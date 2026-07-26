@@ -418,6 +418,20 @@ namespace stub_emit {
         }
     }
 
+    void c_stub_emitter::jmp_rva(std::uint32_t oep_rva) {
+        const std::int32_t rel32 = static_cast<std::int32_t>(
+            static_cast<std::int64_t>(oep_rva) -
+            static_cast<std::int64_t>(section_rva_ + offset() + 5)
+            );
+
+        if (is64_) {
+            x64_.jmp_rel32(rel32);
+        }
+        else {
+            x86_.jmp_rel32(rel32);
+        }
+    }
+
     void c_stub_emitter::ret() {
         if (is64_) {
             x64_.ret();

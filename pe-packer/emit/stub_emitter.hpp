@@ -85,6 +85,7 @@ namespace stub_emit {
         void call(Label label);
         void call(Reg dst);
         void call_rva(std::uint32_t oep_rva);
+        void jmp_rva(std::uint32_t oep_rva);
         void ret();
         void load_image_base(Reg dst);
 
