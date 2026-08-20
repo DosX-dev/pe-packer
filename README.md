@@ -50,7 +50,8 @@ pe-packer.exe input.exe output.exe 4 -fpack 0x401040 0x401072
 | `-finstr`   | Emit random bytes (“fake instructions”) to harm linear sweep / analysis heuristics. |                       |
 | `-noaslr`   | Clear the `DYNAMIC_BASE` flag (disable ASLR) in the output image.                   |                       |
 
-> [!NOTE] > `-fpack` takes two additional arguments: start and end address of the function range.
+> [!NOTE]
+> `-fpack` takes two additional arguments: start and end address of the function range.
 
 ## GUI Interface
 
